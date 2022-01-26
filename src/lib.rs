@@ -211,6 +211,7 @@ impl PartialEq for ReturnType {
             (ReturnType::Str, ReturnType::Str) => true,
             (ReturnType::Unit, ReturnType::Unit) => true,
             (ReturnType::Unknown, _) => true,
+            (_, ReturnType::Unknown) => true,
             _ => false,
         }
     }
