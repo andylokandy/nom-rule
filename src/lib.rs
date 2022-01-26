@@ -8,7 +8,7 @@ use syn::{punctuated::Punctuated, Token};
 #[proc_macro_error]
 pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let tokens: TokenStream = tokens.into();
-    let mut iter = tokens.into_iter();
+    let mut iter = tokens.into_iter().peekable();
 
     let whitespace = match iter.next() {
         Some(TokenTree::Group(group)) => match iter.next() {
@@ -25,6 +25,12 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     };
 
     let rule = unwrap_pratt(RuleParser.parse(&mut iter));
+
+    if iter.peek().is_some() {
+        let rest: TokenStream = iter.collect();
+        abort!(rest, "Unable to parse the following rules: {}", rest);
+    }
+
     rule.check_return_type();
 
     rule.to_token_stream(&whitespace).into()
@@ -52,7 +58,7 @@ fn unwrap_pratt(res: Result<Rule, PrattError<TokenTree, pratt::NoError>>) -> Rul
 
 struct RuleParser;
 
-impl PrattParser<<TokenStream as IntoIterator>::IntoIter> for RuleParser {
+impl<I: Iterator<Item = TokenTree>> PrattParser<I> for RuleParser {
     type Error = pratt::NoError;
     type Input = TokenTree;
     type Output = Rule;
@@ -68,7 +74,9 @@ impl PrattParser<<TokenStream as IntoIterator>::IntoIter> for RuleParser {
             TokenTree::Punct(punct) if punct.as_char() == '?' => Affix::Postfix(Precedence(3)),
             TokenTree::Punct(punct) if punct.as_char() == '+' => Affix::Postfix(Precedence(3)),
             TokenTree::Punct(punct) if punct.as_char() == '*' => Affix::Postfix(Precedence(3)),
-            TokenTree::Punct(punct) if punct.as_char() == '^' => Affix::Prefix(Precedence(4)),
+            TokenTree::Punct(punct) if punct.as_char() == '&' => Affix::Prefix(Precedence(4)),
+            TokenTree::Punct(punct) if punct.as_char() == '!' => Affix::Prefix(Precedence(4)),
+            TokenTree::Punct(punct) if punct.as_char() == '^' => Affix::Prefix(Precedence(5)),
             _ => Affix::Nilfix,
         };
         Ok(affix)
@@ -127,6 +135,14 @@ impl PrattParser<<TokenStream as IntoIterator>::IntoIter> for RuleParser {
                     "Symbol '^' is only allowed to be followed by a string literal"
                 ),
             },
+            TokenTree::Punct(punct) if punct.as_char() == '&' => {
+                let span = tree.span().join(rhs.span()).unwrap();
+                Rule::PositivePredicate(span, Box::new(rhs))
+            }
+            TokenTree::Punct(punct) if punct.as_char() == '!' => {
+                let span = tree.span().join(rhs.span()).unwrap();
+                Rule::NegativePredicate(span, Box::new(rhs))
+            }
             _ => unreachable!(),
         };
         Ok(rule)
@@ -157,6 +173,8 @@ enum Rule {
     Tag(Literal),
     TagNoCase(Span, Literal),
     ExternalFunction(Ident),
+    PositivePredicate(Span, Box<Rule>),
+    NegativePredicate(Span, Box<Rule>),
     Optional(Span, Box<Rule>),
     Many0(Span, Box<Rule>),
     Many1(Span, Box<Rule>),
@@ -169,6 +187,7 @@ enum ReturnType {
     Option(Box<ReturnType>),
     Vec(Box<ReturnType>),
     Str,
+    Unit,
     Unknown,
 }
 
@@ -178,6 +197,7 @@ impl std::fmt::Display for ReturnType {
             ReturnType::Option(ty) => write!(f, "Option<{}>", ty),
             ReturnType::Vec(ty) => write!(f, "Vec<{}>", ty),
             ReturnType::Str => write!(f, "&str"),
+            ReturnType::Unit => write!(f, "()"),
             ReturnType::Unknown => write!(f, "_"),
         }
     }
@@ -189,6 +209,7 @@ impl PartialEq for ReturnType {
             (ReturnType::Option(lhs), ReturnType::Option(rhs)) => lhs == rhs,
             (ReturnType::Vec(lhs), ReturnType::Vec(rhs)) => lhs == rhs,
             (ReturnType::Str, ReturnType::Str) => true,
+            (ReturnType::Unit, ReturnType::Unit) => true,
             (ReturnType::Unknown, _) => true,
             _ => false,
         }
@@ -200,6 +221,7 @@ impl Rule {
         match self {
             Rule::Tag(_) | Rule::TagNoCase(_, _) => ReturnType::Str,
             Rule::ExternalFunction(_) => ReturnType::Unknown,
+            Rule::PositivePredicate(_, _) | Rule::NegativePredicate(_, _) => ReturnType::Unit,
             Rule::Optional(_, rule) => ReturnType::Option(Box::new(rule.check_return_type())),
             Rule::Many0(_, rule) | Rule::Many1(_, rule) => {
                 ReturnType::Vec(Box::new(rule.check_return_type()))
@@ -238,6 +260,8 @@ impl Rule {
             Rule::Tag(lit) => lit.span(),
             Rule::ExternalFunction(ident) => ident.span(),
             Rule::TagNoCase(span, _)
+            | Rule::PositivePredicate(span, _)
+            | Rule::NegativePredicate(span, _)
             | Rule::Optional(span, _)
             | Rule::Many0(span, _)
             | Rule::Many1(span, _)
@@ -256,6 +280,14 @@ impl Rule {
             }
             Rule::ExternalFunction(ident) => {
                 quote! { #ident }
+            }
+            Rule::PositivePredicate(_, rule) => {
+                let rule = rule.to_token_stream(whitespace);
+                quote! { nom::combinator::map(nom::combinator::peek(#rule), |_| ()) }
+            }
+            Rule::NegativePredicate(_, rule) => {
+                let rule = rule.to_token_stream(whitespace);
+                quote! { nom::combinator::not(#rule) }
             }
             Rule::Optional(_, rule) => {
                 let rule = rule.to_token_stream(whitespace);
