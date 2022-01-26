@@ -1,0 +1,15 @@
+[package]
+name = "nom-rule"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nom = "7"
+syn = "1"
+quote = "1"
+pratt = "0.3"
+proc-macro2 = "1"
+proc-macro-error = "1"
+
+[lib]
+proc-macro = true
