@@ -11,5 +11,8 @@ pratt = "0.3"
 proc-macro2 = "1"
 proc-macro-error = "1"
 
+[dev-dependencies]
+logos = "0.12"
+
 [lib]
 proc-macro = true

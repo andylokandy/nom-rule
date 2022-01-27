@@ -10,18 +10,29 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let tokens: TokenStream = tokens.into();
     let mut iter = tokens.into_iter().peekable();
 
-    let whitespace = match iter.next() {
+    let tagger = match iter.next() {
         Some(TokenTree::Group(group)) => match iter.next() {
             Some(TokenTree::Punct(punct)) if punct.as_char() == ',' => group,
-            Some(tt) => abort!(tt, "Expected ',' after the whitespace parameter"),
-            None => abort_call_site!("Expected ',' after the whitespace parameter"),
+            Some(tt) => abort!(tt, "Expected ',' after the tagger parameter"),
+            None => abort_call_site!("Expected ',' after the tagger parameter"),
         },
         Some(tt) => abort!(
             tt,
-            "Expected the first parameter to be a whitespace parser between parentheses, \n\n\
-             help: consider 'rule!((nom::character::complete::multispace0), ...)'"
+            "Expected the first parameter to be a tagger parser between parentheses"
         ),
-        None => abort_call_site!("Unexpected empty rule"),
+        None => abort_call_site!("Unexpected empty tagger"),
+    };
+    let match_token = match iter.next() {
+        Some(TokenTree::Group(group)) => match iter.next() {
+            Some(TokenTree::Punct(punct)) if punct.as_char() == ',' => group,
+            Some(tt) => abort!(tt, "Expected ',' after the match_token parameter"),
+            None => abort_call_site!("Expected ',' after the match_token parameter"),
+        },
+        Some(tt) => abort!(
+            tt,
+            "Expected the second parameter to be a match_token parser between parentheses"
+        ),
+        None => abort_call_site!("Unexpected empty match_token"),
     };
 
     let rule = unwrap_pratt(RuleParser.parse(&mut iter));
@@ -33,7 +44,11 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     rule.check_return_type();
 
-    rule.to_token_stream(&whitespace).into()
+    let terminal = CustomTerminal {
+        tagger,
+        match_token,
+    };
+    rule.to_token_stream(&terminal).into()
 }
 
 fn unwrap_pratt(res: Result<Rule, PrattError<TokenTree, pratt::NoError>>) -> Rule {
@@ -76,7 +91,7 @@ impl<I: Iterator<Item = TokenTree>> PrattParser<I> for RuleParser {
             TokenTree::Punct(punct) if punct.as_char() == '*' => Affix::Postfix(Precedence(3)),
             TokenTree::Punct(punct) if punct.as_char() == '&' => Affix::Prefix(Precedence(4)),
             TokenTree::Punct(punct) if punct.as_char() == '!' => Affix::Prefix(Precedence(4)),
-            TokenTree::Punct(punct) if punct.as_char() == '^' => Affix::Prefix(Precedence(5)),
+            TokenTree::Punct(punct) if punct.as_char() == '#' => Affix::Prefix(Precedence(5)),
             _ => Affix::Nilfix,
         };
         Ok(affix)
@@ -84,7 +99,7 @@ impl<I: Iterator<Item = TokenTree>> PrattParser<I> for RuleParser {
 
     fn primary(&mut self, tree: TokenTree) -> pratt::Result<Rule> {
         let rule = match tree {
-            TokenTree::Ident(ident) => Rule::ExternalFunction(ident),
+            TokenTree::Ident(ident) => Rule::MatchToken(ident),
             TokenTree::Literal(lit) => Rule::Tag(lit),
             TokenTree::Group(group) => {
                 unwrap_pratt(RuleParser.parse(&mut group.stream().into_iter()))
@@ -125,14 +140,14 @@ impl<I: Iterator<Item = TokenTree>> PrattParser<I> for RuleParser {
 
     fn prefix(&mut self, tree: TokenTree, rhs: Rule) -> pratt::Result<Rule> {
         let rule = match tree.clone() {
-            TokenTree::Punct(punct) if punct.as_char() == '^' => match rhs.clone() {
-                Rule::Tag(tag) => {
+            TokenTree::Punct(punct) if punct.as_char() == '#' => match rhs.clone() {
+                Rule::MatchToken(ident) => {
                     let span = tree.span().join(rhs.span()).unwrap();
-                    Rule::TagNoCase(span, tag)
+                    Rule::ExternalFunction(span, ident)
                 }
                 _ => abort!(
                     tree,
-                    "Symbol '^' is only allowed to be followed by a string literal"
+                    "Symbol '#' is only allowed to be followed by an function identifier"
                 ),
             },
             TokenTree::Punct(punct) if punct.as_char() == '&' => {
@@ -168,11 +183,11 @@ impl<I: Iterator<Item = TokenTree>> PrattParser<I> for RuleParser {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Rule {
     Tag(Literal),
-    TagNoCase(Span, Literal),
-    ExternalFunction(Ident),
+    MatchToken(Ident),
+    ExternalFunction(Span, Ident),
     PositivePredicate(Span, Box<Rule>),
     NegativePredicate(Span, Box<Rule>),
     Optional(Span, Box<Rule>),
@@ -186,9 +201,13 @@ enum Rule {
 enum ReturnType {
     Option(Box<ReturnType>),
     Vec(Box<ReturnType>),
-    Str,
     Unit,
     Unknown,
+}
+
+struct CustomTerminal {
+    tagger: Group,
+    match_token: Group,
 }
 
 impl std::fmt::Display for ReturnType {
@@ -196,7 +215,6 @@ impl std::fmt::Display for ReturnType {
         match self {
             ReturnType::Option(ty) => write!(f, "Option<{}>", ty),
             ReturnType::Vec(ty) => write!(f, "Vec<{}>", ty),
-            ReturnType::Str => write!(f, "&str"),
             ReturnType::Unit => write!(f, "()"),
             ReturnType::Unknown => write!(f, "_"),
         }
@@ -208,7 +226,6 @@ impl PartialEq for ReturnType {
         match (self, other) {
             (ReturnType::Option(lhs), ReturnType::Option(rhs)) => lhs == rhs,
             (ReturnType::Vec(lhs), ReturnType::Vec(rhs)) => lhs == rhs,
-            (ReturnType::Str, ReturnType::Str) => true,
             (ReturnType::Unit, ReturnType::Unit) => true,
             (ReturnType::Unknown, _) => true,
             (_, ReturnType::Unknown) => true,
@@ -220,8 +237,9 @@ impl PartialEq for ReturnType {
 impl Rule {
     fn check_return_type(&self) -> ReturnType {
         match self {
-            Rule::Tag(_) | Rule::TagNoCase(_, _) => ReturnType::Str,
-            Rule::ExternalFunction(_) => ReturnType::Unknown,
+            Rule::Tag(_) | Rule::MatchToken(_) | Rule::ExternalFunction(_, _) => {
+                ReturnType::Unknown
+            }
             Rule::PositivePredicate(_, _) | Rule::NegativePredicate(_, _) => ReturnType::Unit,
             Rule::Optional(_, rule) => ReturnType::Option(Box::new(rule.check_return_type())),
             Rule::Many0(_, rule) | Rule::Many1(_, rule) => {
@@ -259,8 +277,8 @@ impl Rule {
     fn span(&self) -> Span {
         match self {
             Rule::Tag(lit) => lit.span(),
-            Rule::ExternalFunction(ident) => ident.span(),
-            Rule::TagNoCase(span, _)
+            Rule::MatchToken(ident) => ident.span(),
+            Rule::ExternalFunction(span, _)
             | Rule::PositivePredicate(span, _)
             | Rule::NegativePredicate(span, _)
             | Rule::Optional(span, _)
@@ -271,51 +289,50 @@ impl Rule {
         }
     }
 
-    fn to_tokens(&self, whitespace: &Group, tokens: &mut TokenStream) {
+    fn to_tokens(&self, terminal: &CustomTerminal, tokens: &mut TokenStream) {
         let token = match self {
             Rule::Tag(tag) => {
-                quote! { nom::bytes::complete::tag(#tag) }
+                let tagger = &terminal.tagger;
+                quote! { #tagger (#tag) }
             }
-            Rule::TagNoCase(_, tag) => {
-                quote! { nom::bytes::complete::tag_no_case(#tag) }
+            Rule::MatchToken(token) => {
+                let match_token = &terminal.match_token;
+                quote! { #match_token (#token) }
             }
-            Rule::ExternalFunction(ident) => {
+            Rule::ExternalFunction(_, ident) => {
                 quote! { #ident }
             }
             Rule::PositivePredicate(_, rule) => {
-                let rule = rule.to_token_stream(whitespace);
+                let rule = rule.to_token_stream(terminal);
                 quote! { nom::combinator::map(nom::combinator::peek(#rule), |_| ()) }
             }
             Rule::NegativePredicate(_, rule) => {
-                let rule = rule.to_token_stream(whitespace);
+                let rule = rule.to_token_stream(terminal);
                 quote! { nom::combinator::not(#rule) }
             }
             Rule::Optional(_, rule) => {
-                let rule = rule.to_token_stream(whitespace);
+                let rule = rule.to_token_stream(terminal);
                 quote! { nom::combinator::opt(#rule) }
             }
             Rule::Many0(_, rule) => {
-                let rule = rule.to_token_stream(whitespace);
-                quote! { nom::multi::many0(nom::sequence::preceded(#whitespace, #rule)) }
+                let rule = rule.to_token_stream(terminal);
+                quote! { nom::multi::many0(#rule) }
             }
             Rule::Many1(_, rule) => {
-                let rule = rule.to_token_stream(whitespace);
-                quote! { nom::multi::many1(nom::sequence::preceded(#whitespace, #rule)) }
+                let rule = rule.to_token_stream(terminal);
+                quote! { nom::multi::many1(#rule) }
             }
             Rule::Sequence(_, rules) => {
                 let list: Punctuated<TokenStream, Token![,]> = rules
                     .iter()
-                    .map(|rule| {
-                        let rule = rule.to_token_stream(whitespace);
-                        quote! { nom::sequence::preceded(#whitespace, #rule) }
-                    })
+                    .map(|rule| rule.to_token_stream(terminal))
                     .collect();
                 quote! { nom::sequence::tuple((#list)) }
             }
             Rule::Choice(_, rules) => {
                 let list: Punctuated<TokenStream, Token![,]> = rules
                     .iter()
-                    .map(|rule| rule.to_token_stream(whitespace))
+                    .map(|rule| rule.to_token_stream(terminal))
                     .collect();
                 quote! { nom::branch::alt((#list)) }
             }
@@ -324,9 +341,9 @@ impl Rule {
         tokens.extend(token);
     }
 
-    fn to_token_stream(&self, whitespace: &Group) -> TokenStream {
+    fn to_token_stream(&self, terminal: &CustomTerminal) -> TokenStream {
         let mut tokens = TokenStream::new();
-        self.to_tokens(whitespace, &mut tokens);
+        self.to_tokens(terminal, &mut tokens);
         tokens
     }
 }
