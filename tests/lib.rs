@@ -8,12 +8,12 @@ use nom::{
 use TokenKind::*;
 
 macro_rules! rule {
-    ($($tt:tt)*) => { nom_rule::rule!((tagger), (match_token), $($tt)*) }
+    ($($tt:tt)*) => { nom_rule::rule!((match_text), (match_token), $($tt)*) }
 }
 
 #[test]
 fn sql_create_table() {
-    let tokens = tokenize("create table user (id int, name varchar);");
+    let tokens = tokenise("create table user (id int, name varchar);");
 
     let mut rule = rule!(
         CREATE ~ TABLE ~ #ident ~ "(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";"
@@ -98,7 +98,7 @@ struct Token<'a> {
     span: Span,
 }
 
-fn tokenize(input: &str) -> Vec<Token> {
+fn tokenise(input: &str) -> Vec<Token> {
     let mut lex = TokenKind::lexer(input);
     let mut tokens = Vec::new();
 
@@ -133,7 +133,7 @@ where
     }
 }
 
-fn tagger<'a, Error: ParseError<Input<'a>>>(
+fn match_text<'a, Error: ParseError<Input<'a>>>(
     text: &'a str,
 ) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, &'a Token<'a>, Error> {
     move |i| satisfy(|token: &Token<'a>| token.text == text)(i)

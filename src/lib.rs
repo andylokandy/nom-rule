@@ -10,17 +10,17 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let tokens: TokenStream = tokens.into();
     let mut iter = tokens.into_iter().peekable();
 
-    let tagger = match iter.next() {
+    let match_text = match iter.next() {
         Some(TokenTree::Group(group)) => match iter.next() {
             Some(TokenTree::Punct(punct)) if punct.as_char() == ',' => group,
-            Some(tt) => abort!(tt, "Expected ',' after the tagger parameter"),
-            None => abort_call_site!("Expected ',' after the tagger parameter"),
+            Some(tt) => abort!(tt, "Expected ',' after the match_text parameter"),
+            None => abort_call_site!("Expected ',' after the match_text parameter"),
         },
         Some(tt) => abort!(
             tt,
-            "Expected the first parameter to be a tagger parser between parentheses"
+            "Expected the first parameter to be a match_text parser between parentheses"
         ),
-        None => abort_call_site!("Unexpected empty tagger"),
+        None => abort_call_site!("Unexpected empty match_text"),
     };
     let match_token = match iter.next() {
         Some(TokenTree::Group(group)) => match iter.next() {
@@ -45,7 +45,7 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     rule.check_return_type();
 
     let terminal = CustomTerminal {
-        tagger,
+        match_text,
         match_token,
     };
     rule.to_token_stream(&terminal).into()
@@ -206,7 +206,7 @@ enum ReturnType {
 }
 
 struct CustomTerminal {
-    tagger: Group,
+    match_text: Group,
     match_token: Group,
 }
 
@@ -292,8 +292,8 @@ impl Rule {
     fn to_tokens(&self, terminal: &CustomTerminal, tokens: &mut TokenStream) {
         let token = match self {
             Rule::Tag(tag) => {
-                let tagger = &terminal.tagger;
-                quote! { #tagger (#tag) }
+                let match_text = &terminal.match_text;
+                quote! { #match_text (#tag) }
             }
             Rule::MatchToken(token) => {
                 let match_token = &terminal.match_token;
