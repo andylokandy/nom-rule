@@ -1,10 +1,10 @@
 [package]
 name = "nom-rule"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["andylokandy"]
 edition = "2021"
 license = "MIT"
-description = "A procedural macro to define nom combinators in simple DSL"
+description = "A procedural macro for defining nom combinators in simple DSL"
 homepage = "https://github.com/andylokandy/nom-rule"
 repository = "https://github.com/andylokandy/nom-rule"
 documentation = "https://docs.rs/minitrace-nom-rule"
