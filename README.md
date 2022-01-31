@@ -89,16 +89,16 @@ It will get translated into:
 
 ```rust
 let mut rule = nom::sequence::tuple((
-    (match_token)(CREATE),
-    (match_token)(TABLE),
+    (crate::match_token)(CREATE),
+    (crate::match_token)(TABLE),
     ident,
-    (match_text)("("),
+    (crate::match_text)("("),
     nom::multi::many0(nom::sequence::tuple((
         ident,
         ident,
-        nom::combinator::opt((match_text)(",")),
+        nom::combinator::opt((crate::match_text)(",")),
     ))),
-    (match_text)(")"),
-    (match_text)(";"),
+    (crate::match_text)(")"),
+    (crate::match_text)(";"),
 ));
 ```
