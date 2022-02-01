@@ -13,33 +13,33 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let match_text = match iter.next() {
         Some(TokenTree::Group(group)) => match iter.next() {
             Some(TokenTree::Punct(punct)) if punct.as_char() == ',' => group,
-            Some(tt) => abort!(tt, "Expected ',' after the match_text parameter"),
-            None => abort_call_site!("Expected ',' after the match_text parameter"),
+            Some(tt) => abort!(tt, "expected ',' after the match_text parameter"),
+            None => abort_call_site!("expected ',' after the match_text parameter"),
         },
         Some(tt) => abort!(
             tt,
-            "Expected the first parameter to be a match_text parser between parentheses"
+            "expected the first parameter to be a match_text parser between parentheses"
         ),
-        None => abort_call_site!("Unexpected empty match_text"),
+        None => abort_call_site!("unexpected empty match_text"),
     };
     let match_token = match iter.next() {
         Some(TokenTree::Group(group)) => match iter.next() {
             Some(TokenTree::Punct(punct)) if punct.as_char() == ',' => group,
-            Some(tt) => abort!(tt, "Expected ',' after the match_token parameter"),
-            None => abort_call_site!("Expected ',' after the match_token parameter"),
+            Some(tt) => abort!(tt, "expected ',' after the match_token parameter"),
+            None => abort_call_site!("expected ',' after the match_token parameter"),
         },
         Some(tt) => abort!(
             tt,
-            "Expected the second parameter to be a match_token parser between parentheses"
+            "expected the second parameter to be a match_token parser between parentheses"
         ),
-        None => abort_call_site!("Unexpected empty match_token"),
+        None => abort_call_site!("unexpected empty match_token"),
     };
 
     let rule = unwrap_pratt(RuleParser.parse(&mut iter));
 
     if iter.peek().is_some() {
         let rest: TokenStream = iter.collect();
-        abort!(rest, "Unable to parse the following rules: {}", rest);
+        abort!(rest, "unable to parse the following rules: {}", rest);
     }
 
     rule.check_return_type();
@@ -54,18 +54,18 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
 fn unwrap_pratt(res: Result<Rule, PrattError<TokenTree, pratt::NoError>>) -> Rule {
     match res {
         Ok(res) => res,
-        Err(PrattError::EmptyInput) => abort_call_site!("Unexpected empty rule"),
+        Err(PrattError::EmptyInput) => abort_call_site!("unexpected empty rule"),
         Err(PrattError::UnexpectedNilfix(input)) => {
-            abort!(input.span(), "Unable to parse the value")
+            abort!(input.span(), "unable to parse the value")
         }
         Err(PrattError::UnexpectedPrefix(input)) => {
-            abort!(input.span(), "Unable to parse the prefix operator")
+            abort!(input.span(), "unable to parse the prefix operator")
         }
         Err(PrattError::UnexpectedInfix(input)) => {
-            abort!(input.span(), "Unable to parse the binary operator")
+            abort!(input.span(), "unable to parse the binary operator")
         }
         Err(PrattError::UnexpectedPostfix(input)) => {
-            abort!(input.span(), "Unable to parse the postfix operator")
+            abort!(input.span(), "unable to parse the postfix operator")
         }
         Err(PrattError::UserError(_)) => unreachable!(),
     }
@@ -147,7 +147,7 @@ impl<I: Iterator<Item = TokenTree>> PrattParser<I> for RuleParser {
                 }
                 _ => abort!(
                     tree,
-                    "Symbol '#' is only allowed to be followed by an function identifier"
+                    "symbol '#' is only allowed to be followed by an function identifier"
                 ),
             },
             TokenTree::Punct(punct) if punct.as_char() == '&' => {
@@ -257,12 +257,12 @@ impl Rule {
                         (ReturnType::Option(_), _) => {
                             abort!(
                                 slice[0].span(),
-                                "Optional shouldn't be in a choice because it will shortcut the following branches",
+                                "optional shouldn't be in a choice because it will shortcut the following branches",
                             )
                         }
                         (a, b) if a != b => abort!(
                             slice[0].span().join(slice[1].span()).unwrap(),
-                            "Type mismatched between {:} and {:}",
+                            "type mismatched between {:} and {:}",
                             a,
                             b,
                         ),
