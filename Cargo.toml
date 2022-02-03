@@ -7,7 +7,7 @@ license = "MIT"
 description = "A procedural macro for defining nom combinators in simple DSL"
 homepage = "https://github.com/andylokandy/nom-rule"
 repository = "https://github.com/andylokandy/nom-rule"
-documentation = "https://docs.rs/minitrace-nom-rule"
+documentation = "https://docs.rs/nom-rule"
 readme = "README.md"
 keywords = ["nom", "parsing", "generator", "pest", "macro"]
 
