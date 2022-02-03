@@ -16,7 +16,7 @@ fn sql_create_table() {
     let tokens = tokenise("create table user (id int, name varchar);");
 
     let mut rule = rule!(
-        CREATE ~ TABLE ~ #ident ~ "(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";"
+        CREATE ~ TABLE ~ #ident ~ "(" ~ (#ident ~ #crate::ident ~ ","?)* ~ ")" ~ #match_text(";")
     );
 
     let res: IResult<_, _> = rule(&tokens);

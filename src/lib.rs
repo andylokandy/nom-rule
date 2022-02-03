@@ -1,193 +1,55 @@
+use nom::{
+    branch::alt,
+    combinator::map,
+    error::{make_error, ErrorKind},
+    multi::many1,
+    IResult,
+};
 use pratt::{Affix, Associativity, PrattError, PrattParser, Precedence};
-use proc_macro2::{Group, Ident, Literal, Span, TokenStream, TokenTree};
+use proc_macro2::{Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use proc_macro_error::{abort, abort_call_site, proc_macro_error};
-use quote::quote;
+use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{punctuated::Punctuated, Token};
+
+macro_rules! rule_bootstrap {
+    ($($tt:tt)*) => { nom_rule_bootstrap::rule!(
+        ($crate::match_punct),
+        (unreachable!()),
+        $($tt)*)
+    }
+}
 
 #[proc_macro]
 #[proc_macro_error]
 pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let tokens: TokenStream = tokens.into();
-    let mut iter = tokens.into_iter().peekable();
+    let i: Vec<TokenTree> = tokens.into_iter().collect();
 
-    let match_text = match iter.next() {
-        Some(TokenTree::Group(group)) => match iter.next() {
-            Some(TokenTree::Punct(punct)) if punct.as_char() == ',' => group,
-            Some(tt) => abort!(tt, "expected ',' after the match_text parameter"),
-            None => abort_call_site!("expected ',' after the match_text parameter"),
-        },
-        Some(tt) => abort!(
-            tt,
-            "expected the first parameter to be a match_text parser between parentheses"
-        ),
-        None => abort_call_site!("unexpected empty match_text"),
-    };
-    let match_token = match iter.next() {
-        Some(TokenTree::Group(group)) => match iter.next() {
-            Some(TokenTree::Punct(punct)) if punct.as_char() == ',' => group,
-            Some(tt) => abort!(tt, "expected ',' after the match_token parameter"),
-            None => abort_call_site!("expected ',' after the match_token parameter"),
-        },
-        Some(tt) => abort!(
-            tt,
-            "expected the second parameter to be a match_token parser between parentheses"
-        ),
-        None => abort_call_site!("unexpected empty match_token"),
-    };
-
-    let rule = unwrap_pratt(RuleParser.parse(&mut iter));
-
-    if iter.peek().is_some() {
-        let rest: TokenStream = iter.collect();
-        abort!(rest, "unable to parse the following rules: {}", rest);
-    }
-
-    rule.check_return_type();
+    let (i, (match_text, _, match_token, _)) = rule_bootstrap! {
+        #group ~ ',' ~ #group ~ ','
+    }(&i)
+    .unwrap();
 
     let terminal = CustomTerminal {
         match_text,
         match_token,
     };
+
+    let rule = parse_rule(i.iter().cloned().collect());
+    rule.check_return_type();
     rule.to_token_stream(&terminal).into()
 }
 
-fn unwrap_pratt(res: Result<Rule, PrattError<TokenTree, pratt::NoError>>) -> Rule {
-    match res {
-        Ok(res) => res,
-        Err(PrattError::EmptyInput) => abort_call_site!("unexpected empty rule"),
-        Err(PrattError::UnexpectedNilfix(input)) => {
-            abort!(input.span(), "unable to parse the value")
-        }
-        Err(PrattError::UnexpectedPrefix(input)) => {
-            abort!(input.span(), "unable to parse the prefix operator")
-        }
-        Err(PrattError::UnexpectedInfix(input)) => {
-            abort!(input.span(), "unable to parse the binary operator")
-        }
-        Err(PrattError::UnexpectedPostfix(input)) => {
-            abort!(input.span(), "unable to parse the postfix operator")
-        }
-        Err(PrattError::UserError(_)) => unreachable!(),
-    }
+#[derive(Debug, Clone)]
+struct Path {
+    segments: Vec<Ident>,
 }
 
-struct RuleParser;
-
-impl<I: Iterator<Item = TokenTree>> PrattParser<I> for RuleParser {
-    type Error = pratt::NoError;
-    type Input = TokenTree;
-    type Output = Rule;
-
-    fn query(&mut self, tree: &TokenTree) -> pratt::Result<Affix> {
-        let affix = match tree {
-            TokenTree::Punct(punct) if punct.as_char() == '|' => {
-                Affix::Infix(Precedence(1), Associativity::Left)
-            }
-            TokenTree::Punct(punct) if punct.as_char() == '~' => {
-                Affix::Infix(Precedence(2), Associativity::Left)
-            }
-            TokenTree::Punct(punct) if punct.as_char() == '?' => Affix::Postfix(Precedence(3)),
-            TokenTree::Punct(punct) if punct.as_char() == '+' => Affix::Postfix(Precedence(3)),
-            TokenTree::Punct(punct) if punct.as_char() == '*' => Affix::Postfix(Precedence(3)),
-            TokenTree::Punct(punct) if punct.as_char() == '&' => Affix::Prefix(Precedence(4)),
-            TokenTree::Punct(punct) if punct.as_char() == '!' => Affix::Prefix(Precedence(4)),
-            TokenTree::Punct(punct) if punct.as_char() == '#' => Affix::Prefix(Precedence(5)),
-            _ => Affix::Nilfix,
-        };
-        Ok(affix)
-    }
-
-    fn primary(&mut self, tree: TokenTree) -> pratt::Result<Rule> {
-        let rule = match tree {
-            TokenTree::Ident(ident) => Rule::MatchToken(ident),
-            TokenTree::Literal(lit) => Rule::Tag(lit),
-            TokenTree::Group(group) => {
-                unwrap_pratt(RuleParser.parse(&mut group.stream().into_iter()))
-            }
-            _ => unreachable!(),
-        };
-        Ok(rule)
-    }
-
-    fn infix(&mut self, lhs: Rule, tree: TokenTree, rhs: Rule) -> pratt::Result<Rule> {
-        let rule = match tree.clone() {
-            TokenTree::Punct(punct) if punct.as_char() == '~' => match lhs {
-                Rule::Sequence(span, mut seq) => {
-                    let span = span.join(tree.span()).unwrap().join(rhs.span()).unwrap();
-                    seq.push(rhs);
-                    Rule::Sequence(span, seq)
-                }
-                lhs => {
-                    let span = lhs.span().join(rhs.span()).unwrap();
-                    Rule::Sequence(span, vec![lhs, rhs])
-                }
-            },
-            TokenTree::Punct(punct) if punct.as_char() == '|' => match lhs {
-                Rule::Choice(span, mut choices) => {
-                    let span = span.join(tree.span()).unwrap().join(rhs.span()).unwrap();
-                    choices.push(rhs);
-                    Rule::Choice(span, choices)
-                }
-                lhs => {
-                    let span = lhs.span().join(rhs.span()).unwrap();
-                    Rule::Choice(span, vec![lhs, rhs])
-                }
-            },
-            _ => unreachable!(),
-        };
-        Ok(rule)
-    }
-
-    fn prefix(&mut self, tree: TokenTree, rhs: Rule) -> pratt::Result<Rule> {
-        let rule = match tree.clone() {
-            TokenTree::Punct(punct) if punct.as_char() == '#' => match rhs.clone() {
-                Rule::MatchToken(ident) => {
-                    let span = tree.span().join(rhs.span()).unwrap();
-                    Rule::ExternalFunction(span, ident)
-                }
-                _ => abort!(
-                    tree,
-                    "symbol '#' is only allowed to be followed by an function identifier"
-                ),
-            },
-            TokenTree::Punct(punct) if punct.as_char() == '&' => {
-                let span = tree.span().join(rhs.span()).unwrap();
-                Rule::PositivePredicate(span, Box::new(rhs))
-            }
-            TokenTree::Punct(punct) if punct.as_char() == '!' => {
-                let span = tree.span().join(rhs.span()).unwrap();
-                Rule::NegativePredicate(span, Box::new(rhs))
-            }
-            _ => unreachable!(),
-        };
-        Ok(rule)
-    }
-
-    fn postfix(&mut self, lhs: Rule, tree: TokenTree) -> pratt::Result<Rule> {
-        let rule = match tree.clone() {
-            TokenTree::Punct(punct) if punct.as_char() == '?' => {
-                let span = lhs.span().join(tree.span()).unwrap();
-                Rule::Optional(span, Box::new(lhs))
-            }
-            TokenTree::Punct(punct) if punct.as_char() == '*' => {
-                let span = lhs.span().join(tree.span()).unwrap();
-                Rule::Many0(span, Box::new(lhs))
-            }
-            TokenTree::Punct(punct) if punct.as_char() == '+' => {
-                let span = lhs.span().join(tree.span()).unwrap();
-                Rule::Many1(span, Box::new(lhs))
-            }
-            _ => unreachable!(),
-        };
-        Ok(rule)
-    }
-}
-
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum Rule {
-    Tag(Literal),
-    MatchToken(Ident),
-    ExternalFunction(Span, Ident),
+    MatchText(Span, Literal),
+    MatchToken(Span, Path),
+    ExternalFunction(Span, Path, Option<Group>),
     PositivePredicate(Span, Box<Rule>),
     NegativePredicate(Span, Box<Rule>),
     Optional(Span, Box<Rule>),
@@ -195,6 +57,27 @@ enum Rule {
     Many1(Span, Box<Rule>),
     Sequence(Span, Vec<Rule>),
     Choice(Span, Vec<Rule>),
+}
+
+#[derive(Debug, Clone)]
+enum RuleElement {
+    MatchText(Literal),
+    MatchToken(Path),
+    ExternalFunction(Path, Option<Group>),
+    PositivePredicate,
+    NegativePredicate,
+    Optional,
+    Many0,
+    Many1,
+    Sequence,
+    Choice,
+    SubRule(Rule),
+}
+
+#[derive(Debug, Clone)]
+struct WithSpan {
+    elem: RuleElement,
+    span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +91,268 @@ enum ReturnType {
 struct CustomTerminal {
     match_text: Group,
     match_token: Group,
+}
+
+type Input<'a> = &'a [TokenTree];
+
+fn match_punct<'a>(punct: char) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, TokenTree> {
+    move |i| match i.get(0).and_then(|token| match token {
+        TokenTree::Punct(p) if p.as_char() == punct => Some(token.clone()),
+        _ => None,
+    }) {
+        Some(token) => Ok((&i[1..], token)),
+        _ => Err(nom::Err::Error(make_error(i, ErrorKind::Satisfy))),
+    }
+}
+
+fn group<'a>(i: Input<'a>) -> IResult<Input<'a>, Group> {
+    match i.get(0).and_then(|token| match token {
+        TokenTree::Group(group) => Some(group.clone()),
+        _ => None,
+    }) {
+        Some(group) => Ok((&i[1..], group)),
+        _ => Err(nom::Err::Error(make_error(i, ErrorKind::Satisfy))),
+    }
+}
+
+fn literal<'a>(i: Input<'a>) -> IResult<Input<'a>, Literal> {
+    match i.get(0).and_then(|token| match token {
+        TokenTree::Literal(lit) => Some(lit.clone()),
+        _ => None,
+    }) {
+        Some(lit) => Ok((&i[1..], lit)),
+        _ => Err(nom::Err::Error(make_error(i, ErrorKind::Satisfy))),
+    }
+}
+
+fn ident<'a>(i: Input<'a>) -> IResult<Input<'a>, Ident> {
+    match i.get(0).and_then(|token| match token {
+        TokenTree::Ident(ident) => Some(ident.clone()),
+        _ => None,
+    }) {
+        Some(ident) => Ok((&i[1..], ident)),
+        _ => Err(nom::Err::Error(make_error(i, ErrorKind::Satisfy))),
+    }
+}
+
+fn path<'a>(i: Input<'a>) -> IResult<Input<'a>, (Span, Path)> {
+    map(
+        rule_bootstrap! {
+            #ident ~ ( ':' ~ ':' ~ #ident )*
+        },
+        |(head, tail)| {
+            let mut segments = vec![head.clone()];
+            segments.extend(tail.into_iter().map(|(_, _, segment)| segment));
+            let span = segments
+                .iter()
+                .fold(head.span(), |span, seg| span.join(seg.span()).unwrap());
+            (span, Path { segments })
+        },
+    )(i)
+}
+
+fn parse_rule(tokens: TokenStream) -> Rule {
+    let i: Vec<TokenTree> = tokens.into_iter().collect();
+
+    let (i, elems) = many1(parse_rule_element)(&i).unwrap();
+
+    if !i.is_empty() {
+        let rest: TokenStream = i.iter().cloned().collect();
+        abort!(rest, "unable to parse the following rules: {}", rest);
+    }
+
+    let mut iter = elems.into_iter().peekable();
+    let rule = unwrap_pratt(RuleParser.parse(&mut iter));
+
+    if iter.peek().is_some() {
+        let rest: Vec<_> = iter.collect();
+        abort!(
+            rest[0].span,
+            "unable to parse the following rules: {:?}",
+            rest
+        );
+    }
+
+    rule
+}
+
+fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
+    let function_call = map(
+        rule_bootstrap! {
+            '#' ~ #path ~ #group?
+        },
+        |(_, (path_span, fn_path), args)| {
+            let span = args
+                .as_ref()
+                .map(|args| args.span().join(path_span).unwrap())
+                .unwrap_or(path_span);
+            WithSpan {
+                elem: RuleElement::ExternalFunction(fn_path, args),
+                span,
+            }
+        },
+    );
+    alt((
+        map(rule_bootstrap! { '|' }, |token| WithSpan {
+            span: token.span(),
+            elem: RuleElement::Choice,
+        }),
+        map(rule_bootstrap! { '*' }, |token| WithSpan {
+            span: token.span(),
+            elem: RuleElement::Many0,
+        }),
+        map(rule_bootstrap! { '+' }, |token| WithSpan {
+            span: token.span(),
+            elem: RuleElement::Many1,
+        }),
+        map(rule_bootstrap! { '?' }, |token| WithSpan {
+            span: token.span(),
+            elem: RuleElement::Optional,
+        }),
+        map(rule_bootstrap! { '&' }, |token| WithSpan {
+            span: token.span(),
+            elem: RuleElement::PositivePredicate,
+        }),
+        map(rule_bootstrap! { '!' }, |token| WithSpan {
+            span: token.span(),
+            elem: RuleElement::NegativePredicate,
+        }),
+        map(rule_bootstrap! { '~' }, |token| WithSpan {
+            span: token.span(),
+            elem: RuleElement::Sequence,
+        }),
+        map(literal, |lit| WithSpan {
+            span: lit.span(),
+            elem: RuleElement::MatchText(lit),
+        }),
+        map(path, |(span, p)| WithSpan {
+            span,
+            elem: RuleElement::MatchToken(p),
+        }),
+        map(group, |group| WithSpan {
+            span: group.span(),
+            elem: RuleElement::SubRule(parse_rule(group.stream())),
+        }),
+        function_call,
+    ))(i)
+}
+
+fn unwrap_pratt(res: Result<Rule, PrattError<WithSpan, pratt::NoError>>) -> Rule {
+    match res {
+        Ok(res) => res,
+        Err(PrattError::EmptyInput) => abort_call_site!("unexpected end of rule"),
+        Err(PrattError::UnexpectedNilfix(input)) => {
+            abort!(input.span, "unable to parse the value")
+        }
+        Err(PrattError::UnexpectedPrefix(input)) => {
+            abort!(input.span, "unable to parse the prefix operator")
+        }
+        Err(PrattError::UnexpectedInfix(input)) => {
+            abort!(input.span, "unable to parse the binary operator")
+        }
+        Err(PrattError::UnexpectedPostfix(input)) => {
+            abort!(input.span, "unable to parse the postfix operator")
+        }
+        Err(PrattError::UserError(_)) => unreachable!(),
+    }
+}
+
+struct RuleParser;
+
+impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
+    type Error = pratt::NoError;
+    type Input = WithSpan;
+    type Output = Rule;
+
+    fn query(&mut self, elem: &WithSpan) -> pratt::Result<Affix> {
+        let affix = match elem.elem {
+            RuleElement::Choice => Affix::Infix(Precedence(1), Associativity::Left),
+            RuleElement::Sequence => Affix::Infix(Precedence(2), Associativity::Left),
+            RuleElement::Optional => Affix::Postfix(Precedence(3)),
+            RuleElement::Many1 => Affix::Postfix(Precedence(3)),
+            RuleElement::Many0 => Affix::Postfix(Precedence(3)),
+            RuleElement::PositivePredicate => Affix::Prefix(Precedence(4)),
+            RuleElement::NegativePredicate => Affix::Prefix(Precedence(4)),
+            _ => Affix::Nilfix,
+        };
+        Ok(affix)
+    }
+
+    fn primary(&mut self, elem: WithSpan) -> pratt::Result<Rule> {
+        let rule = match elem.elem {
+            RuleElement::SubRule(rule) => rule,
+            RuleElement::MatchText(text) => Rule::MatchText(elem.span, text),
+            RuleElement::MatchToken(token) => Rule::MatchToken(elem.span, token),
+            RuleElement::ExternalFunction(func, args) => {
+                Rule::ExternalFunction(elem.span, func, args)
+            }
+            _ => unreachable!(),
+        };
+        Ok(rule)
+    }
+
+    fn infix(&mut self, lhs: Rule, elem: WithSpan, rhs: Rule) -> pratt::Result<Rule> {
+        let rule = match elem.elem {
+            RuleElement::Sequence => match lhs {
+                Rule::Sequence(span, mut seq) => {
+                    let span = span.join(elem.span).unwrap().join(rhs.span()).unwrap();
+                    seq.push(rhs);
+                    Rule::Sequence(span, seq)
+                }
+                lhs => {
+                    let span = lhs.span().join(rhs.span()).unwrap();
+                    Rule::Sequence(span, vec![lhs, rhs])
+                }
+            },
+            RuleElement::Choice => match lhs {
+                Rule::Choice(span, mut choices) => {
+                    let span = span.join(elem.span).unwrap().join(rhs.span()).unwrap();
+                    choices.push(rhs);
+                    Rule::Choice(span, choices)
+                }
+                lhs => {
+                    let span = lhs.span().join(rhs.span()).unwrap();
+                    Rule::Choice(span, vec![lhs, rhs])
+                }
+            },
+            _ => unreachable!(),
+        };
+        Ok(rule)
+    }
+
+    fn prefix(&mut self, elem: WithSpan, rhs: Rule) -> pratt::Result<Rule> {
+        let rule = match elem.elem {
+            RuleElement::PositivePredicate => {
+                let span = elem.span.join(rhs.span()).unwrap();
+                Rule::PositivePredicate(span, Box::new(rhs))
+            }
+            RuleElement::NegativePredicate => {
+                let span = elem.span.join(rhs.span()).unwrap();
+                Rule::NegativePredicate(span, Box::new(rhs))
+            }
+            _ => unreachable!(),
+        };
+        Ok(rule)
+    }
+
+    fn postfix(&mut self, lhs: Rule, elem: WithSpan) -> pratt::Result<Rule> {
+        let rule = match elem.elem {
+            RuleElement::Optional => {
+                let span = lhs.span().join(elem.span).unwrap();
+                Rule::Optional(span, Box::new(lhs))
+            }
+            RuleElement::Many0 => {
+                let span = lhs.span().join(elem.span).unwrap();
+                Rule::Many0(span, Box::new(lhs))
+            }
+            RuleElement::Many1 => {
+                let span = lhs.span().join(elem.span).unwrap();
+                Rule::Many1(span, Box::new(lhs))
+            }
+            _ => unreachable!(),
+        };
+        Ok(rule)
+    }
 }
 
 impl std::fmt::Display for ReturnType {
@@ -237,7 +382,7 @@ impl PartialEq for ReturnType {
 impl Rule {
     fn check_return_type(&self) -> ReturnType {
         match self {
-            Rule::Tag(_) | Rule::MatchToken(_) | Rule::ExternalFunction(_, _) => {
+            Rule::MatchText(_, _) | Rule::MatchToken(_, _) | Rule::ExternalFunction(_, _, _) => {
                 ReturnType::Unknown
             }
             Rule::PositivePredicate(_, _) | Rule::NegativePredicate(_, _) => ReturnType::Unit,
@@ -276,9 +421,9 @@ impl Rule {
 
     fn span(&self) -> Span {
         match self {
-            Rule::Tag(lit) => lit.span(),
-            Rule::MatchToken(ident) => ident.span(),
-            Rule::ExternalFunction(span, _)
+            Rule::MatchText(span, _)
+            | Rule::MatchToken(span, _)
+            | Rule::ExternalFunction(span, _, _)
             | Rule::PositivePredicate(span, _)
             | Rule::NegativePredicate(span, _)
             | Rule::Optional(span, _)
@@ -291,16 +436,16 @@ impl Rule {
 
     fn to_tokens(&self, terminal: &CustomTerminal, tokens: &mut TokenStream) {
         let token = match self {
-            Rule::Tag(tag) => {
+            Rule::MatchText(_, text) => {
                 let match_text = &terminal.match_text;
-                quote! { #match_text (#tag) }
+                quote! { #match_text (#text) }
             }
-            Rule::MatchToken(token) => {
+            Rule::MatchToken(_, token) => {
                 let match_token = &terminal.match_token;
                 quote! { #match_token (#token) }
             }
-            Rule::ExternalFunction(_, ident) => {
-                quote! { #ident }
+            Rule::ExternalFunction(_, name, arg) => {
+                quote! { #name #arg }
             }
             Rule::PositivePredicate(_, rule) => {
                 let rule = rule.to_token_stream(terminal);
@@ -345,5 +490,18 @@ impl Rule {
         let mut tokens = TokenStream::new();
         self.to_tokens(terminal, &mut tokens);
         tokens
+    }
+}
+
+impl ToTokens for Path {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        for (i, segment) in self.segments.iter().enumerate() {
+            if i > 0 {
+                // Double colon `::`
+                tokens.append(Punct::new(':', Spacing::Joint));
+                tokens.append(Punct::new(':', Spacing::Alone));
+            }
+            segment.to_tokens(tokens);
+        }
     }
 }
