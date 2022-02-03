@@ -50,6 +50,7 @@ enum Rule {
     MatchText(Span, Literal),
     MatchToken(Span, Path),
     ExternalFunction(Span, Path, Option<Group>),
+    Context(Span, Literal, Box<Rule>),
     PositivePredicate(Span, Box<Rule>),
     NegativePredicate(Span, Box<Rule>),
     Optional(Span, Box<Rule>),
@@ -64,6 +65,7 @@ enum RuleElement {
     MatchText(Literal),
     MatchToken(Path),
     ExternalFunction(Path, Option<Group>),
+    Context(Literal),
     PositivePredicate,
     NegativePredicate,
     Optional,
@@ -181,13 +183,26 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
         rule_bootstrap! {
             '#' ~ #path ~ #group?
         },
-        |(_, (path_span, fn_path), args)| {
+        |(hashtag, (path_span, fn_path), args)| {
+            let span = hashtag.span().join(path_span).unwrap();
             let span = args
                 .as_ref()
-                .map(|args| args.span().join(path_span).unwrap())
-                .unwrap_or(path_span);
+                .map(|args| args.span().join(span).unwrap())
+                .unwrap_or(span);
             WithSpan {
                 elem: RuleElement::ExternalFunction(fn_path, args),
+                span,
+            }
+        },
+    );
+    let context = map(
+        rule_bootstrap! {
+            ':' ~ #literal
+        },
+        |(colon, msg)| {
+            let span = colon.span().join(msg.span()).unwrap();
+            WithSpan {
+                elem: RuleElement::Context(msg),
                 span,
             }
         },
@@ -234,6 +249,7 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
             elem: RuleElement::SubRule(parse_rule(group.stream())),
         }),
         function_call,
+        context,
     ))(i)
 }
 
@@ -267,12 +283,13 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
     fn query(&mut self, elem: &WithSpan) -> pratt::Result<Affix> {
         let affix = match elem.elem {
             RuleElement::Choice => Affix::Infix(Precedence(1), Associativity::Left),
-            RuleElement::Sequence => Affix::Infix(Precedence(2), Associativity::Left),
-            RuleElement::Optional => Affix::Postfix(Precedence(3)),
-            RuleElement::Many1 => Affix::Postfix(Precedence(3)),
-            RuleElement::Many0 => Affix::Postfix(Precedence(3)),
-            RuleElement::PositivePredicate => Affix::Prefix(Precedence(4)),
-            RuleElement::NegativePredicate => Affix::Prefix(Precedence(4)),
+            RuleElement::Context(_) => Affix::Postfix(Precedence(2)),
+            RuleElement::Sequence => Affix::Infix(Precedence(3), Associativity::Left),
+            RuleElement::Optional => Affix::Postfix(Precedence(4)),
+            RuleElement::Many1 => Affix::Postfix(Precedence(4)),
+            RuleElement::Many0 => Affix::Postfix(Precedence(4)),
+            RuleElement::PositivePredicate => Affix::Prefix(Precedence(5)),
+            RuleElement::NegativePredicate => Affix::Prefix(Precedence(5)),
             _ => Affix::Nilfix,
         };
         Ok(affix)
@@ -349,6 +366,10 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
                 let span = lhs.span().join(elem.span).unwrap();
                 Rule::Many1(span, Box::new(lhs))
             }
+            RuleElement::Context(msg) => {
+                let span = lhs.span().join(elem.span).unwrap();
+                Rule::Context(span, msg, Box::new(lhs))
+            }
             _ => unreachable!(),
         };
         Ok(rule)
@@ -385,6 +406,7 @@ impl Rule {
             Rule::MatchText(_, _) | Rule::MatchToken(_, _) | Rule::ExternalFunction(_, _, _) => {
                 ReturnType::Unknown
             }
+            Rule::Context(_, _, rule) => rule.check_return_type(),
             Rule::PositivePredicate(_, _) | Rule::NegativePredicate(_, _) => ReturnType::Unit,
             Rule::Optional(_, rule) => ReturnType::Option(Box::new(rule.check_return_type())),
             Rule::Many0(_, rule) | Rule::Many1(_, rule) => {
@@ -424,6 +446,7 @@ impl Rule {
             Rule::MatchText(span, _)
             | Rule::MatchToken(span, _)
             | Rule::ExternalFunction(span, _, _)
+            | Rule::Context(span, _, _)
             | Rule::PositivePredicate(span, _)
             | Rule::NegativePredicate(span, _)
             | Rule::Optional(span, _)
@@ -446,6 +469,10 @@ impl Rule {
             }
             Rule::ExternalFunction(_, name, arg) => {
                 quote! { #name #arg }
+            }
+            Rule::Context(_, msg, rule) => {
+                let rule = rule.to_token_stream(terminal);
+                quote! { nom::error::context(#msg, #rule) }
             }
             Rule::PositivePredicate(_, rule) => {
                 let rule = rule.to_token_stream(terminal);
