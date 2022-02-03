@@ -1,6 +1,6 @@
 [package]
 name = "nom-rule"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["andylokandy"]
 edition = "2021"
 license = "MIT"
@@ -13,7 +13,6 @@ keywords = ["nom", "parsing", "generator", "pest", "macro"]
 
 [dependencies]
 nom = "7"
-nom-rule-bootstrap = { package = "nom-rule", version = "0.1" }
 syn = "1"
 quote = "1"
 pratt = "0.3"

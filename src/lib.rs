@@ -1,8 +1,9 @@
 use nom::{
     branch::alt,
-    combinator::map,
+    combinator::{map, opt},
     error::{make_error, ErrorKind},
-    multi::many1,
+    multi::{many0, many1},
+    sequence::tuple,
     IResult,
 };
 use pratt::{Affix, Associativity, PrattError, PrattParser, Precedence};
@@ -11,24 +12,14 @@ use proc_macro_error::{abort, abort_call_site, proc_macro_error};
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{punctuated::Punctuated, Token};
 
-macro_rules! rule_bootstrap {
-    ($($tt:tt)*) => { nom_rule_bootstrap::rule!(
-        ($crate::match_punct),
-        (unreachable!()),
-        $($tt)*)
-    }
-}
-
 #[proc_macro]
 #[proc_macro_error]
 pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let tokens: TokenStream = tokens.into();
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
-    let (i, (match_text, _, match_token, _)) = rule_bootstrap! {
-        #group ~ ',' ~ #group ~ ','
-    }(&i)
-    .unwrap();
+    let (i, (match_text, _, match_token, _)) =
+        tuple((group, match_punct(','), group, match_punct(',')))(&i).unwrap();
 
     let terminal = CustomTerminal {
         match_text,
@@ -139,9 +130,10 @@ fn ident<'a>(i: Input<'a>) -> IResult<Input<'a>, Ident> {
 
 fn path<'a>(i: Input<'a>) -> IResult<Input<'a>, (Span, Path)> {
     map(
-        rule_bootstrap! {
-            #ident ~ ( ':' ~ ':' ~ #ident )*
-        },
+        tuple((
+            ident,
+            many0(tuple((match_punct(':'), match_punct(':'), ident))),
+        )),
         |(head, tail)| {
             let mut segments = vec![head.clone()];
             segments.extend(tail.into_iter().map(|(_, _, segment)| segment));
@@ -180,9 +172,7 @@ fn parse_rule(tokens: TokenStream) -> Rule {
 
 fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
     let function_call = map(
-        rule_bootstrap! {
-            '#' ~ #path ~ #group?
-        },
+        tuple((match_punct('#'), path, opt(group))),
         |(hashtag, (path_span, fn_path), args)| {
             let span = hashtag.span().join(path_span).unwrap();
             let span = args
@@ -195,44 +185,39 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
             }
         },
     );
-    let context = map(
-        rule_bootstrap! {
-            ':' ~ #literal
-        },
-        |(colon, msg)| {
-            let span = colon.span().join(msg.span()).unwrap();
-            WithSpan {
-                elem: RuleElement::Context(msg),
-                span,
-            }
-        },
-    );
+    let context = map(tuple((match_punct(':'), literal)), |(colon, msg)| {
+        let span = colon.span().join(msg.span()).unwrap();
+        WithSpan {
+            elem: RuleElement::Context(msg),
+            span,
+        }
+    });
     alt((
-        map(rule_bootstrap! { '|' }, |token| WithSpan {
+        map(match_punct('|'), |token| WithSpan {
             span: token.span(),
             elem: RuleElement::Choice,
         }),
-        map(rule_bootstrap! { '*' }, |token| WithSpan {
+        map(match_punct('*'), |token| WithSpan {
             span: token.span(),
             elem: RuleElement::Many0,
         }),
-        map(rule_bootstrap! { '+' }, |token| WithSpan {
+        map(match_punct('+'), |token| WithSpan {
             span: token.span(),
             elem: RuleElement::Many1,
         }),
-        map(rule_bootstrap! { '?' }, |token| WithSpan {
+        map(match_punct('?'), |token| WithSpan {
             span: token.span(),
             elem: RuleElement::Optional,
         }),
-        map(rule_bootstrap! { '&' }, |token| WithSpan {
+        map(match_punct('&'), |token| WithSpan {
             span: token.span(),
             elem: RuleElement::PositivePredicate,
         }),
-        map(rule_bootstrap! { '!' }, |token| WithSpan {
+        map(match_punct('!'), |token| WithSpan {
             span: token.span(),
             elem: RuleElement::NegativePredicate,
         }),
-        map(rule_bootstrap! { '~' }, |token| WithSpan {
+        map(match_punct('~'), |token| WithSpan {
             span: token.span(),
             elem: RuleElement::Sequence,
         }),
