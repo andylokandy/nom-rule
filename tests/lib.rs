@@ -8,7 +8,7 @@ use nom::{
 use TokenKind::*;
 
 macro_rules! rule {
-    ($($tt:tt)*) => { nom_rule::rule!((match_text), (match_token), $($tt)*) }
+    ($($tt:tt)*) => { nom_rule::rule!(match_text, match_token, $($tt)*) }
 }
 
 #[test]

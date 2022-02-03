@@ -11,7 +11,7 @@ A procedural macro for defining [nom](https://crates.io/crates/nom) combinators 
 ```toml
 [dependencies]
 nom = "7"
-nom-rule = "0.1"
+nom-rule = "0.2"
 ```
 
 ## Syntax
@@ -28,6 +28,7 @@ The procedural macro `rule!` provided by this crate is designed for the ease of 
 8. `a | b | c`: Choices between a, b, and c. It'll get expanded into `nom::branch::alt`.
 9. `&a`: Positive predicate. It'll get expanded into `nom::combinator::map(nom::combinator::peek(a), |_| ())`. Note that it doesn't consume the input.
 10. `!a`: Negative predicate. It'll get expanded into `nom::combinator::not`. Note that it doesn't consume the input.
+11. `... : "description"`: Context description for error reporting. It'll get expanded into `nom::error::context`.
 
 ## Example
 
@@ -75,7 +76,9 @@ Then give the two parser to `nom_rule::rule!` by wrapping it into a custom macro
 
 ```rust
 macro_rules! rule {
-    ($($tt:tt)*) => { nom_rule::rule!(($crate::match_text), ($crate::match_token), $($tt)*) }
+    ($($tt:tt)*) => { 
+        nom_rule::rule!($crate::match_text, $crate::match_token, $($tt)*)
+    }
 }
 ```
 
@@ -83,24 +86,28 @@ To define a parser for the SQL of creating table:
 
 ```rust
 let mut rule = rule!(
-    CREATE ~ TABLE ~ #ident ~ "(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";"
+    CREATE ~ TABLE ~ #ident ~ "(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";" : "CREATE TABLE statement"
 );
 ```
 
-It will get translated into:
+It will get expanded into:
 
 ```rust
-let mut rule = nom::sequence::tuple((
-    (crate::match_token)(CREATE),
-    (crate::match_token)(TABLE),
-    ident,
-    (crate::match_text)("("),
-    nom::multi::many0(nom::sequence::tuple((
-        ident,
-        ident,
-        nom::combinator::opt((crate::match_text)(",")),
-    ))),
-    (crate::match_text)(")"),
-    (crate::match_text)(";"),
-));
+let mut rule = 
+    nom::error::context(
+        "CREATE TABLE statement",
+        nom::sequence::tuple((
+            (crate::match_token)(CREATE),
+            (crate::match_token)(TABLE),
+            ident,
+            (crate::match_text)("("),
+            nom::multi::many0(nom::sequence::tuple((
+                ident,
+                ident,
+                nom::combinator::opt((crate::match_text)(",")),
+            ))),
+            (crate::match_text)(")"),
+            (crate::match_text)(";"),
+        ))
+    );
 ```

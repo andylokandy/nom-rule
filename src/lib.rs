@@ -2,7 +2,7 @@ use nom::{
     branch::alt,
     combinator::{map, opt},
     error::{make_error, ErrorKind},
-    multi::{many0, many1},
+    multi::many0,
     sequence::tuple,
     IResult,
 };
@@ -19,11 +19,11 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
     let (i, (match_text, _, match_token, _)) =
-        tuple((group, match_punct(','), group, match_punct(',')))(&i).unwrap();
+        tuple((path, match_punct(','), path, match_punct(',')))(&i).unwrap();
 
     let terminal = CustomTerminal {
-        match_text,
-        match_token,
+        match_text: match_text.1,
+        match_token: match_token.1,
     };
 
     let rule = parse_rule(i.iter().cloned().collect());
@@ -82,8 +82,8 @@ enum ReturnType {
 }
 
 struct CustomTerminal {
-    match_text: Group,
-    match_token: Group,
+    match_text: Path,
+    match_token: Path,
 }
 
 type Input<'a> = &'a [TokenTree];
@@ -148,7 +148,7 @@ fn path<'a>(i: Input<'a>) -> IResult<Input<'a>, (Span, Path)> {
 fn parse_rule(tokens: TokenStream) -> Rule {
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
-    let (i, elems) = many1(parse_rule_element)(&i).unwrap();
+    let (i, elems) = many0(parse_rule_element)(&i).unwrap();
 
     if !i.is_empty() {
         let rest: TokenStream = i.iter().cloned().collect();
