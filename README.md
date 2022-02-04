@@ -76,8 +76,8 @@ Then give the two parser to `nom_rule::rule!` by wrapping it into a custom macro
 
 ```rust
 macro_rules! rule {
-    ($($tt:tt)*) => { 
-        nom_rule::rule!($crate::match_text, $crate::match_token, $($tt)*)
+    ($($token:tt)*) => { 
+        nom_rule::rule!($crate::match_text, $crate::match_token, $($token)*)
     }
 }
 ```

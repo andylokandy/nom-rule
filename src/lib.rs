@@ -12,6 +12,7 @@ use proc_macro_error::{abort, abort_call_site, proc_macro_error};
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{punctuated::Punctuated, Token};
 
+/// FYI: macro term -> https://doc.rust-lang.org/reference/macros.html
 #[proc_macro]
 #[proc_macro_error]
 pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {

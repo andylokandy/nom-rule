@@ -7,15 +7,16 @@ use nom::{
 
 use TokenKind::*;
 
-macro_rules! rule {
-    ($($tt:tt)*) => { nom_rule::rule!(match_text, match_token, $($tt)*) }
+/// Differ these rule macro.
+macro_rules! rule_ {
+    ($($token:tt)*) => { nom_rule::rule!(match_text, match_token, $($token)*) }
 }
 
 #[test]
 fn sql_create_table() {
     let tokens = tokenise("create table user (id int, name varchar);");
 
-    let mut rule = rule!(
+    let mut rule = rule_!(
         CREATE ~ TABLE ~ #ident ~ "(" ~ (#ident ~ #crate::ident ~ ","?)* ~ #match_text(")") ~ (";" | ";;" : "double semi") : "CREATE TABLE statement"
     );
 
