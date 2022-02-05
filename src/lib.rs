@@ -149,15 +149,15 @@ fn parse_rule(tokens: TokenStream) -> Rule {
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
     let (i, elems) = many0(parse_rule_element)(&i).unwrap();
-
     if !i.is_empty() {
         let rest: TokenStream = i.iter().cloned().collect();
         abort!(rest, "unable to parse the following rules: {}", rest);
     }
 
+    let elems = amend_sequence(elems);
+
     let mut iter = elems.into_iter().peekable();
     let rule = unwrap_pratt(RuleParser.parse(&mut iter));
-
     if iter.peek().is_some() {
         let rest: Vec<_> = iter.collect();
         abort!(
@@ -236,6 +236,43 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
         function_call,
         context,
     ))(i)
+}
+
+// Automatically insert `RuleElement::Sequence` between primaries.
+fn amend_sequence(elems: impl IntoIterator<Item = WithSpan>) -> Vec<WithSpan> {
+    let mut output = Vec::new();
+    let mut iter = elems.into_iter().peekable();
+    loop {
+        match (iter.next(), iter.peek()) {
+            (Some(lhs), Some(rhs)) if should_amend(&lhs, rhs) => {
+                let span = lhs.span.join(rhs.span).unwrap();
+                output.push(lhs);
+                output.push(WithSpan {
+                    elem: RuleElement::Sequence,
+                    span,
+                });
+            }
+            (Some(elem), _) => {
+                output.push(elem);
+            }
+            (None, _) => break,
+        }
+    }
+    output
+}
+
+fn should_amend(lhs: &WithSpan, rhs: &WithSpan) -> bool {
+    match (query_affix(lhs), query_affix(rhs)) {
+        (Affix::Nilfix, Affix::Nilfix)
+        | (Affix::Nilfix, Affix::Prefix(_))
+        | (Affix::Postfix(_), Affix::Nilfix)
+        | (Affix::Postfix(_), Affix::Prefix(_)) => true,
+        _ => false,
+    }
+}
+
+fn query_affix(elem: &WithSpan) -> Affix {
+    PrattParser::<std::iter::Once<_>>::query(&mut RuleParser, elem).unwrap()
 }
 
 fn unwrap_pratt(res: Result<Rule, PrattError<WithSpan, pratt::NoError>>) -> Rule {
