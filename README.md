@@ -111,3 +111,19 @@ let mut rule =
         ))
     );
 ```
+
+## Auto Sequence (nightly only)
+
+`nom-rule` is able to automatically insert `~` in the rule when necessary so that you get the example above working the same as the following:
+
+```rust
+let mut rule = rule!(
+    CREATE TABLE #ident "(" (#ident #ident ","?)* ")" ";" : "CREATE TABLE statement"
+);
+```
+
+To enable this feature, you need to use a nightly channel rust complier, and add this to the `Cargo.toml`:
+
+```toml
+nom-rule = { version = "0.2", features = ["auto-sequence"] }
+```

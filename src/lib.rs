@@ -1,6 +1,8 @@
+#![cfg_attr(feature = "auto-sequence", feature(proc_macro_span))]
+
 use nom::{
     branch::alt,
-    combinator::{map, opt},
+    combinator::{map, opt, verify},
     error::{make_error, ErrorKind},
     multi::many0,
     sequence::tuple,
@@ -154,7 +156,8 @@ fn parse_rule(tokens: TokenStream) -> Rule {
         abort!(rest, "unable to parse the following rules: {}", rest);
     }
 
-    let elems = amend_sequence(elems);
+    #[cfg(feature = "auto-sequence")]
+    let elems = auto_sequence::amend_sequence(elems);
 
     let mut iter = elems.into_iter().peekable();
     let rule = unwrap_pratt(RuleParser.parse(&mut iter));
@@ -171,20 +174,30 @@ fn parse_rule(tokens: TokenStream) -> Rule {
 }
 
 fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
-    let function_call = map(
-        tuple((match_punct('#'), path, opt(group))),
-        |(hashtag, (path_span, fn_path), args)| {
-            let span = hashtag.span().join(path_span).unwrap();
-            let span = args
-                .as_ref()
-                .map(|args| args.span().join(span).unwrap())
-                .unwrap_or(span);
+    let function_call = |i| {
+        let (i, hashtag) = match_punct('#')(i)?;
+        let (i, (path_span, fn_path)) = path(i)?;
+        let (i, args) = opt(verify(group, |g| {
+            if cfg!(feature = "auto-sequence") {
+                path_span.end() == g.span().start()
+            } else {
+                true
+            }
+        }))(i)?;
+        let span = hashtag.span().join(path_span).unwrap();
+        let span = args
+            .as_ref()
+            .map(|args| args.span().join(span).unwrap())
+            .unwrap_or(span);
+
+        Ok((
+            i,
             WithSpan {
                 elem: RuleElement::ExternalFunction(fn_path, args),
                 span,
-            }
-        },
-    );
+            },
+        ))
+    };
     let context = map(tuple((match_punct(':'), literal)), |(colon, msg)| {
         let span = colon.span().join(msg.span()).unwrap();
         WithSpan {
@@ -238,41 +251,46 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
     ))(i)
 }
 
-// Automatically insert `RuleElement::Sequence` between primaries.
-fn amend_sequence(elems: impl IntoIterator<Item = WithSpan>) -> Vec<WithSpan> {
-    let mut output = Vec::new();
-    let mut iter = elems.into_iter().peekable();
-    loop {
-        match (iter.next(), iter.peek()) {
-            (Some(lhs), Some(rhs)) if should_amend(&lhs, rhs) => {
-                let span = lhs.span.join(rhs.span).unwrap();
-                output.push(lhs);
-                output.push(WithSpan {
-                    elem: RuleElement::Sequence,
-                    span,
-                });
+#[cfg(feature = "auto-sequence")]
+mod auto_sequence {
+    use super::*;
+
+    // Automatically insert `RuleElement::Sequence` between primaries.
+    pub(crate) fn amend_sequence(elems: impl IntoIterator<Item = WithSpan>) -> Vec<WithSpan> {
+        let mut output = Vec::new();
+        let mut iter = elems.into_iter().peekable();
+        loop {
+            match (iter.next(), iter.peek()) {
+                (Some(lhs), Some(rhs)) if should_amend(&lhs, rhs) => {
+                    let span = lhs.span.join(rhs.span).unwrap();
+                    output.push(lhs);
+                    output.push(WithSpan {
+                        elem: RuleElement::Sequence,
+                        span,
+                    });
+                }
+                (Some(elem), _) => {
+                    output.push(elem);
+                }
+                (None, _) => break,
             }
-            (Some(elem), _) => {
-                output.push(elem);
-            }
-            (None, _) => break,
+        }
+        output
+    }
+
+    fn should_amend(lhs: &WithSpan, rhs: &WithSpan) -> bool {
+        match (query_affix(lhs), query_affix(rhs)) {
+            (Affix::Nilfix, Affix::Nilfix)
+            | (Affix::Nilfix, Affix::Prefix(_))
+            | (Affix::Postfix(_), Affix::Nilfix)
+            | (Affix::Postfix(_), Affix::Prefix(_)) => true,
+            _ => false,
         }
     }
-    output
-}
 
-fn should_amend(lhs: &WithSpan, rhs: &WithSpan) -> bool {
-    match (query_affix(lhs), query_affix(rhs)) {
-        (Affix::Nilfix, Affix::Nilfix)
-        | (Affix::Nilfix, Affix::Prefix(_))
-        | (Affix::Postfix(_), Affix::Nilfix)
-        | (Affix::Postfix(_), Affix::Prefix(_)) => true,
-        _ => false,
+    fn query_affix(elem: &WithSpan) -> Affix {
+        PrattParser::<std::iter::Once<_>>::query(&mut RuleParser, elem).unwrap()
     }
-}
-
-fn query_affix(elem: &WithSpan) -> Affix {
-    PrattParser::<std::iter::Once<_>>::query(&mut RuleParser, elem).unwrap()
 }
 
 fn unwrap_pratt(res: Result<Rule, PrattError<WithSpan, pratt::NoError>>) -> Rule {

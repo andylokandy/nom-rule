@@ -16,7 +16,7 @@ fn sql_create_table() {
     let tokens = tokenise("create table user (id int, name varchar);");
 
     let mut rule = rule!(
-        CREATE TABLE #ident "(" (#ident #crate::ident ","?)* #match_text(")") (";" | ";;" : "double semi") : "CREATE TABLE statement"
+        CREATE ~ TABLE ~ #ident ~ "(" ~ (#ident ~ #crate::ident ~ ","?)* ~ #match_text(")") ~ (";" | ";;" : "double semi") : "CREATE TABLE statement"
     );
 
     let res: IResult<_, _> = rule(&tokens);
@@ -61,6 +61,32 @@ fn sql_create_table() {
                 text: ";",
                 span: 40..41,
             },
+        ),
+    );
+}
+
+#[cfg(feature = "auto-sequence")]
+#[test]
+fn sql_column_ref() {
+    let tokens = tokenise("a.b");
+
+    let mut rule = rule!(
+         #ident ("." #ident)?
+    );
+
+    let res: IResult<_, _> = rule(&tokens);
+    assert_eq!(
+        dbg!(res.unwrap().1),
+        (
+            "a",
+            Some((
+                &Token {
+                    kind: Whitespace,
+                    text: ".",
+                    span: 1..2,
+                },
+                "b",
+            ),),
         ),
     );
 }

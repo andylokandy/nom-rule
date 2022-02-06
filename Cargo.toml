@@ -1,6 +1,6 @@
 [package]
 name = "nom-rule"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["andylokandy"]
 edition = "2021"
 license = "MIT"
@@ -11,16 +11,19 @@ documentation = "https://docs.rs/nom-rule"
 readme = "README.md"
 keywords = ["nom", "parsing", "generator", "pest", "macro"]
 
+[lib]
+proc-macro = true
+
 [dependencies]
 nom = "7"
 syn = "1"
 quote = "1"
 pratt = "0.3"
-proc-macro2 = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 proc-macro-error = "1"
 
 [dev-dependencies]
 logos = "0.12"
 
-[lib]
-proc-macro = true
+[features]
+auto-sequence = []
