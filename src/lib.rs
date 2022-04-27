@@ -47,6 +47,7 @@ enum Rule {
     PositivePredicate(Span, Box<Rule>),
     NegativePredicate(Span, Box<Rule>),
     Optional(Span, Box<Rule>),
+    Cut(Span, Box<Rule>),
     Many0(Span, Box<Rule>),
     Many1(Span, Box<Rule>),
     Sequence(Span, Vec<Rule>),
@@ -62,6 +63,7 @@ enum RuleElement {
     PositivePredicate,
     NegativePredicate,
     Optional,
+    Cut,
     Many0,
     Many1,
     Sequence,
@@ -222,6 +224,10 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
             span: token.span(),
             elem: RuleElement::Optional,
         }),
+        map(match_punct('^'), |token| WithSpan {
+            span: token.span(),
+            elem: RuleElement::Cut,
+        }),
         map(match_punct('&'), |token| WithSpan {
             span: token.span(),
             elem: RuleElement::PositivePredicate,
@@ -296,7 +302,7 @@ mod auto_sequence {
 fn unwrap_pratt(res: Result<Rule, PrattError<WithSpan, pratt::NoError>>) -> Rule {
     match res {
         Ok(res) => res,
-        Err(PrattError::EmptyInput) => abort_call_site!("unexpected end of rule"),
+        Err(PrattError::EmptyInput) => abort_call_site!("expected more tokens for rule"),
         Err(PrattError::UnexpectedNilfix(input)) => {
             abort!(input.span, "unable to parse the value")
         }
@@ -328,6 +334,7 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
             RuleElement::Optional => Affix::Postfix(Precedence(4)),
             RuleElement::Many1 => Affix::Postfix(Precedence(4)),
             RuleElement::Many0 => Affix::Postfix(Precedence(4)),
+            RuleElement::Cut => Affix::Prefix(Precedence(5)),
             RuleElement::PositivePredicate => Affix::Prefix(Precedence(5)),
             RuleElement::NegativePredicate => Affix::Prefix(Precedence(5)),
             _ => Affix::Nilfix,
@@ -379,6 +386,10 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
 
     fn prefix(&mut self, elem: WithSpan, rhs: Rule) -> pratt::Result<Rule> {
         let rule = match elem.elem {
+            RuleElement::Cut => {
+                let span = elem.span.join(rhs.span()).unwrap();
+                Rule::Cut(span, Box::new(rhs))
+            }
             RuleElement::PositivePredicate => {
                 let span = elem.span.join(rhs.span()).unwrap();
                 Rule::PositivePredicate(span, Box::new(rhs))
@@ -449,6 +460,7 @@ impl Rule {
             Rule::Context(_, _, rule) => rule.check_return_type(),
             Rule::PositivePredicate(_, _) | Rule::NegativePredicate(_, _) => ReturnType::Unit,
             Rule::Optional(_, rule) => ReturnType::Option(Box::new(rule.check_return_type())),
+            Rule::Cut(_, rule) => rule.check_return_type(),
             Rule::Many0(_, rule) | Rule::Many1(_, rule) => {
                 ReturnType::Vec(Box::new(rule.check_return_type()))
             }
@@ -490,6 +502,7 @@ impl Rule {
             | Rule::PositivePredicate(span, _)
             | Rule::NegativePredicate(span, _)
             | Rule::Optional(span, _)
+            | Rule::Cut(span, _)
             | Rule::Many0(span, _)
             | Rule::Many1(span, _)
             | Rule::Sequence(span, _)
@@ -525,6 +538,10 @@ impl Rule {
             Rule::Optional(_, rule) => {
                 let rule = rule.to_token_stream(terminal);
                 quote! { nom::combinator::opt(#rule) }
+            }
+            Rule::Cut(_, rule) => {
+                let rule = rule.to_token_stream(terminal);
+                quote! { nom::combinator::cut(#rule) }
             }
             Rule::Many0(_, rule) => {
                 let rule = rule.to_token_stream(terminal);

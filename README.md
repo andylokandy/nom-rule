@@ -28,7 +28,8 @@ The procedural macro `rule!` provided by this crate is designed for the ease of 
 8. `a | b | c`: Choices between a, b, and c. It'll get expanded into `nom::branch::alt`.
 9. `&a`: Positive predicate. It'll get expanded into `nom::combinator::map(nom::combinator::peek(a), |_| ())`. Note that it doesn't consume the input.
 10. `!a`: Negative predicate. It'll get expanded into `nom::combinator::not`. Note that it doesn't consume the input.
-11. `... : "description"`: Context description for error reporting. It'll get expanded into `nom::error::context`.
+11. `^a`:  Cut parser. It'll get expanded into `nom::combinator::cut`.
+12. `... : "description"`: Context description for error reporting. It'll get expanded into `nom::error::context`.
 
 ## Example
 
@@ -86,7 +87,7 @@ To define a parser for the SQL of creating table:
 
 ```rust
 let mut rule = rule!(
-    CREATE ~ TABLE ~ #ident ~ "(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";" : "CREATE TABLE statement"
+    CREATE ~ TABLE ~ #ident ~ ^"(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";" : "CREATE TABLE statement"
 );
 ```
 
@@ -100,7 +101,7 @@ let mut rule =
             (crate::match_token)(CREATE),
             (crate::match_token)(TABLE),
             ident,
-            (crate::match_text)("("),
+            (nom::combinator::cut(crate::match_text)("(")),
             nom::multi::many0(nom::sequence::tuple((
                 ident,
                 ident,
