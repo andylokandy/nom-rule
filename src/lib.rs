@@ -44,8 +44,8 @@ enum Rule {
     MatchToken(Span, Path),
     ExternalFunction(Span, Path, Option<Group>),
     Context(Span, Literal, Box<Rule>),
-    PositivePredicate(Span, Box<Rule>),
-    NegativePredicate(Span, Box<Rule>),
+    Peek(Span, Box<Rule>),
+    Not(Span, Box<Rule>),
     Optional(Span, Box<Rule>),
     Cut(Span, Box<Rule>),
     Many0(Span, Box<Rule>),
@@ -60,8 +60,8 @@ enum RuleElement {
     MatchToken(Path),
     ExternalFunction(Path, Option<Group>),
     Context(Literal),
-    PositivePredicate,
-    NegativePredicate,
+    Peek,
+    Not,
     Optional,
     Cut,
     Many0,
@@ -230,11 +230,11 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
         }),
         map(match_punct('&'), |token| WithSpan {
             span: token.span(),
-            elem: RuleElement::PositivePredicate,
+            elem: RuleElement::Peek,
         }),
         map(match_punct('!'), |token| WithSpan {
             span: token.span(),
-            elem: RuleElement::NegativePredicate,
+            elem: RuleElement::Not,
         }),
         map(match_punct('~'), |token| WithSpan {
             span: token.span(),
@@ -335,8 +335,8 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
             RuleElement::Many1 => Affix::Postfix(Precedence(4)),
             RuleElement::Many0 => Affix::Postfix(Precedence(4)),
             RuleElement::Cut => Affix::Prefix(Precedence(5)),
-            RuleElement::PositivePredicate => Affix::Prefix(Precedence(5)),
-            RuleElement::NegativePredicate => Affix::Prefix(Precedence(5)),
+            RuleElement::Peek => Affix::Prefix(Precedence(5)),
+            RuleElement::Not => Affix::Prefix(Precedence(5)),
             _ => Affix::Nilfix,
         };
         Ok(affix)
@@ -390,13 +390,13 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
                 let span = elem.span.join(rhs.span()).unwrap();
                 Rule::Cut(span, Box::new(rhs))
             }
-            RuleElement::PositivePredicate => {
+            RuleElement::Peek => {
                 let span = elem.span.join(rhs.span()).unwrap();
-                Rule::PositivePredicate(span, Box::new(rhs))
+                Rule::Peek(span, Box::new(rhs))
             }
-            RuleElement::NegativePredicate => {
+            RuleElement::Not => {
                 let span = elem.span.join(rhs.span()).unwrap();
-                Rule::NegativePredicate(span, Box::new(rhs))
+                Rule::Not(span, Box::new(rhs))
             }
             _ => unreachable!(),
         };
@@ -457,8 +457,8 @@ impl Rule {
             Rule::MatchText(_, _) | Rule::MatchToken(_, _) | Rule::ExternalFunction(_, _, _) => {
                 ReturnType::Unknown
             }
-            Rule::Context(_, _, rule) => rule.check_return_type(),
-            Rule::PositivePredicate(_, _) | Rule::NegativePredicate(_, _) => ReturnType::Unit,
+            Rule::Context(_, _, rule) | Rule::Peek(_, rule) => rule.check_return_type(),
+            Rule::Not(_, _) => ReturnType::Unit,
             Rule::Optional(_, rule) => ReturnType::Option(Box::new(rule.check_return_type())),
             Rule::Cut(_, rule) => rule.check_return_type(),
             Rule::Many0(_, rule) | Rule::Many1(_, rule) => {
@@ -499,8 +499,8 @@ impl Rule {
             | Rule::MatchToken(span, _)
             | Rule::ExternalFunction(span, _, _)
             | Rule::Context(span, _, _)
-            | Rule::PositivePredicate(span, _)
-            | Rule::NegativePredicate(span, _)
+            | Rule::Peek(span, _)
+            | Rule::Not(span, _)
             | Rule::Optional(span, _)
             | Rule::Cut(span, _)
             | Rule::Many0(span, _)
@@ -527,11 +527,11 @@ impl Rule {
                 let rule = rule.to_token_stream(terminal);
                 quote! { nom::error::context(#msg, #rule) }
             }
-            Rule::PositivePredicate(_, rule) => {
+            Rule::Peek(_, rule) => {
                 let rule = rule.to_token_stream(terminal);
-                quote! { nom::combinator::map(nom::combinator::peek(#rule), |_| ()) }
+                quote! { nom::combinator::peek(#rule) }
             }
-            Rule::NegativePredicate(_, rule) => {
+            Rule::Not(_, rule) => {
                 let rule = rule.to_token_stream(terminal);
                 quote! { nom::combinator::not(#rule) }
             }

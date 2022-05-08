@@ -26,7 +26,7 @@ The procedural macro `rule!` provided by this crate is designed for the ease of 
 6. `(...)*`: zero or more repeated patterns. It'll get expanded into `nom::multi::many0`.
 7. `(...)?`: Optional parser. It'll get expanded into `nom::combinator::opt`.
 8. `a | b | c`: Choices between a, b, and c. It'll get expanded into `nom::branch::alt`.
-9. `&a`: Positive predicate. It'll get expanded into `nom::combinator::map(nom::combinator::peek(a), |_| ())`. Note that it doesn't consume the input.
+9. `&a`: Peek. It'll get expanded into `nom::combinator::peek(a)`. Note that it doesn't consume the input.
 10. `!a`: Negative predicate. It'll get expanded into `nom::combinator::not`. Note that it doesn't consume the input.
 11. `^a`:  Cut parser. It'll get expanded into `nom::combinator::cut`.
 12. `... : "description"`: Context description for error reporting. It'll get expanded into `nom::error::context`.
