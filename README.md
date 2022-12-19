@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/nom-rule.svg)](https://crates.io/crates/nom-rule)
 [![LICENSE](https://img.shields.io/github/license/andylokandy/nom-rule.svg)](https://github.com/andylokandy/nom-rule/blob/master/LICENSE)
 
-A procedural macro for defining [nom](https://crates.io/crates/nom) combinators in simple DSL. Requires `nom` v5.0+.
+A procedural macro for defining [nom](https://crates.io/crates/nom) combinators in simple DSL. Requires `nom` v5.0+ and nightly Rust toolchain.
 
 ## Dependencies
 
@@ -113,7 +113,9 @@ let mut rule =
     );
 ```
 
-## Auto Sequence (nightly only)
+> See more example in `tests/lib.rs` and the main dependant [databend](https://github.com/datafuselabs/databend/blob/cd08fb5f826ba318aef819f993d3773f6566a7e8/src/query/ast/src/parser/statement.rs).
+
+## Auto Sequence
 
 `nom-rule` is able to automatically insert `~` in the rule when necessary so that you get the example above working the same as the following:
 
@@ -123,7 +125,7 @@ let mut rule = rule!(
 );
 ```
 
-To enable this feature, you need to use a nightly channel rust complier, and add this to the `Cargo.toml`:
+To enable this feature, you need to add this to the `Cargo.toml`:
 
 ```toml
 nom-rule = { version = "0.2", features = ["auto-sequence"] }
