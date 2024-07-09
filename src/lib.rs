@@ -143,7 +143,8 @@ fn path<'a>(i: Input<'a>) -> IResult<Input<'a>, (Span, Path)> {
             segments.extend(tail.into_iter().map(|(_, _, segment)| segment));
             let span = segments
                 .iter()
-                .fold(head.span(), |span, seg| span.join(seg.span()).unwrap());
+                .try_fold(head.span(), |span, seg| span.join(seg.span()))
+                .unwrap_or(Span::call_site());
             (span, Path { segments })
         },
     )(i)
@@ -186,10 +187,10 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
                 true
             }
         }))(i)?;
-        let span = hashtag.span().join(path_span).unwrap();
+        let span = hashtag.span().join(path_span).unwrap_or(Span::call_site());
         let span = args
             .as_ref()
-            .map(|args| args.span().join(span).unwrap())
+            .and_then(|args| args.span().join(span))
             .unwrap_or(span);
 
         Ok((
@@ -201,7 +202,7 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
         ))
     };
     let context = map(tuple((match_punct(':'), literal)), |(colon, msg)| {
-        let span = colon.span().join(msg.span()).unwrap();
+        let span = colon.span().join(msg.span()).unwrap_or(Span::call_site());
         WithSpan {
             elem: RuleElement::Context(msg),
             span,
@@ -268,7 +269,7 @@ mod auto_sequence {
         loop {
             match (iter.next(), iter.peek()) {
                 (Some(lhs), Some(rhs)) if should_amend(&lhs, rhs) => {
-                    let span = lhs.span.join(rhs.span).unwrap();
+                    let span = lhs.span.join(rhs.span);
                     output.push(lhs);
                     output.push(WithSpan {
                         elem: RuleElement::Sequence,
@@ -359,23 +360,31 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
         let rule = match elem.elem {
             RuleElement::Sequence => match lhs {
                 Rule::Sequence(span, mut seq) => {
-                    let span = span.join(elem.span).unwrap().join(rhs.span()).unwrap();
+                    let span = span
+                        .join(elem.span)
+                        .unwrap_or(Span::call_site())
+                        .join(rhs.span())
+                        .unwrap_or(Span::call_site());
                     seq.push(rhs);
                     Rule::Sequence(span, seq)
                 }
                 lhs => {
-                    let span = lhs.span().join(rhs.span()).unwrap();
+                    let span = lhs.span().join(rhs.span()).unwrap_or(Span::call_site());
                     Rule::Sequence(span, vec![lhs, rhs])
                 }
             },
             RuleElement::Choice => match lhs {
                 Rule::Choice(span, mut choices) => {
-                    let span = span.join(elem.span).unwrap().join(rhs.span()).unwrap();
+                    let span = span
+                        .join(elem.span)
+                        .unwrap_or(Span::call_site())
+                        .join(rhs.span())
+                        .unwrap_or(Span::call_site());
                     choices.push(rhs);
                     Rule::Choice(span, choices)
                 }
                 lhs => {
-                    let span = lhs.span().join(rhs.span()).unwrap();
+                    let span = lhs.span().join(rhs.span()).unwrap_or(Span::call_site());
                     Rule::Choice(span, vec![lhs, rhs])
                 }
             },
@@ -387,15 +396,15 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
     fn prefix(&mut self, elem: WithSpan, rhs: Rule) -> pratt::Result<Rule> {
         let rule = match elem.elem {
             RuleElement::Cut => {
-                let span = elem.span.join(rhs.span()).unwrap();
+                let span = elem.span.join(rhs.span()).unwrap_or(Span::call_site());
                 Rule::Cut(span, Box::new(rhs))
             }
             RuleElement::Peek => {
-                let span = elem.span.join(rhs.span()).unwrap();
+                let span = elem.span.join(rhs.span()).unwrap_or(Span::call_site());
                 Rule::Peek(span, Box::new(rhs))
             }
             RuleElement::Not => {
-                let span = elem.span.join(rhs.span()).unwrap();
+                let span = elem.span.join(rhs.span()).unwrap_or(Span::call_site());
                 Rule::Not(span, Box::new(rhs))
             }
             _ => unreachable!(),
@@ -406,19 +415,19 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
     fn postfix(&mut self, lhs: Rule, elem: WithSpan) -> pratt::Result<Rule> {
         let rule = match elem.elem {
             RuleElement::Optional => {
-                let span = lhs.span().join(elem.span).unwrap();
+                let span = lhs.span().join(elem.span).unwrap_or(Span::call_site());
                 Rule::Optional(span, Box::new(lhs))
             }
             RuleElement::Many0 => {
-                let span = lhs.span().join(elem.span).unwrap();
+                let span = lhs.span().join(elem.span).unwrap_or(Span::call_site());
                 Rule::Many0(span, Box::new(lhs))
             }
             RuleElement::Many1 => {
-                let span = lhs.span().join(elem.span).unwrap();
+                let span = lhs.span().join(elem.span).unwrap_or(Span::call_site());
                 Rule::Many1(span, Box::new(lhs))
             }
             RuleElement::Context(msg) => {
-                let span = lhs.span().join(elem.span).unwrap();
+                let span = lhs.span().join(elem.span).unwrap_or(Span::call_site());
                 Rule::Context(span, msg, Box::new(lhs))
             }
             _ => unreachable!(),
@@ -480,7 +489,10 @@ impl Rule {
                             )
                         }
                         (a, b) if a != b => abort!(
-                            slice[0].span().join(slice[1].span()).unwrap(),
+                            slice[0]
+                                .span()
+                                .join(slice[1].span())
+                                .unwrap_or(Span::call_site()),
                             "type mismatched between {:} and {:}",
                             a,
                             b,
