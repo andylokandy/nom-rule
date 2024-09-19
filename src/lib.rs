@@ -1,32 +1,114 @@
-#![cfg_attr(feature = "auto-sequence", feature(proc_macro_span))]
+//! A procedural macro crate for writing nom parsers using a grammar-like syntax.
+//!
+//! The `nom-rule` crate provides the `rule!` macro, which allows you to define parsers in a DSL
+//! similar to grammar rules. This improves readability and maintainability.
+//!
+//! # Syntax
+//!
+//! The macro follows these rules:
+//!
+//! | **Syntax**            | **Description**                                                                  | **Expanded to**                         | **Operator Precedence**  |
+//! |-----------------------|----------------------------------------------------------------------------------|-----------------------------------------|--------------------------|
+//! | `TOKEN`               | Matches a token by kind.                                                         | `match_token(TOKEN)`                    | -                        |
+//! | `"("`                 | Matches a token by its text.                                                     | `match_text("(")`                       | -                        |
+//! | `#fn_name`            | Calls an external nom parser function `fn_name`.                                 | `fn_name`                               | -                        |
+//! | `#fn_name(a, b, c)`   | Calls an external nom parser function `fn_name` with arguments.                  | `fn_name(a, b, c)`                      | -                        |
+//! | `a ~ b ~ c`           | Sequences parsers `a`, `b`, and `c`.                                             | `nom::sequence::tuple((a, b, c))`       | 3 (Left Associative)     |
+//! | `a+`                  | One or more repetitions.                                                         | `nom::multi::many1(a)`                  | 4 (Postfix)              |
+//! | `a*`                  | Zero or more repetitions.                                                        | `nom::multi::many0(a)`                  | 4 (Postfix)              |
+//! | `a?`                  | Optional parser.                                                                 | `nom::combinator::opt(a)`               | 4 (Postfix)              |
+//! | `a \| b \| c`         | Choice between parsers `a`, `b`, and `c`.                                        | `nom::branch::alt((a, b, c))`           | 1 (Left Associative)     |
+//! | `&a`                  | Peeks at parser `a` without consuming input.                                     | `nom::combinator::peek(a)`              | 5 (Prefix)               |
+//! | `!a`                  | Negative lookahead for parser `a`.                                               | `nom::combinator::not(a)`               | 5 (Prefix)               |
+//! | `^a`                  | Cuts the parser `a`.                                                             | `nom::combinator::cut(a)`               | 5 (Prefix)               |
+//! | `... : "description"` | Adds a context description for error reporting.                                  | `nom::error::context("description", a)` | 2 (Postfix)              |
+//! # Example
+//!
+//! ```rust
+//! use nom_rule::rule;
+//!
+//! // Define your match functions
+//! fn match_text<'a>(text: &'a str) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, &'a Token<'a>> {
+//!     // Implementation
+//! }
+//!
+//! fn match_token<'a>(kind: TokenKind) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, &'a Token<'a>> {
+//!     // Implementation
+//! }
+//!
+//! fn ident<'a>(input: Input<'a>) -> IResult<Input<'a>, &str> {
+//!     // Implementation
+//! }
+//!
+//! // Use the `rule!` macro
+//! let mut parser = rule!(
+//!     CREATE ~ TABLE ~ #ident ~ ^"(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";"
+//!     : "CREATE TABLE statement"
+//! );
+//! ```
 
-use nom::{
-    branch::alt,
-    combinator::{map, opt, verify},
-    error::{make_error, ErrorKind},
-    multi::many0,
-    sequence::tuple,
-    IResult,
-};
-use pratt::{Affix, Associativity, PrattError, PrattParser, Precedence};
-use proc_macro2::{Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
-use proc_macro_error::{abort, abort_call_site, proc_macro_error};
-use quote::{quote, ToTokens, TokenStreamExt};
-use syn::{punctuated::Punctuated, Token};
+use nom::branch::alt;
+use nom::combinator::map;
+use nom::combinator::opt;
+use nom::error::make_error;
+use nom::error::ErrorKind;
+use nom::multi::many0;
+use nom::sequence::tuple;
+use nom::IResult;
+use pratt::Affix;
+use pratt::Associativity;
+use pratt::PrattError;
+use pratt::PrattParser;
+use pratt::Precedence;
+use proc_macro2::Group;
+use proc_macro2::Ident;
+use proc_macro2::Literal;
+use proc_macro2::Punct;
+use proc_macro2::Spacing;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
+use proc_macro2::TokenTree;
+use proc_macro_error::abort;
+use proc_macro_error::abort_call_site;
+use proc_macro_error::proc_macro_error;
+use quote::quote;
+use quote::ToTokens;
+use quote::TokenStreamExt;
+use syn::punctuated::Punctuated;
+use syn::Token;
 
+/// A procedural macro for writing nom parsers using a grammar-like syntax.
+///
+/// See the [crate level documentation](index.html) for more information.
 #[proc_macro]
 #[proc_macro_error]
 pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let tokens: TokenStream = tokens.into();
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
-    let (i, (match_text, _, match_token, _)) =
-        tuple((path, match_punct(','), path, match_punct(',')))(&i).unwrap();
-
-    let terminal = CustomTerminal {
-        match_text: match_text.1,
-        match_token: match_token.1,
+    // Attempt to parse the paths for match_text and match_token
+    let (i, terminals) = if let Ok((rest, (match_text, _, match_token, _))) =
+        tuple((path, match_punct(','), path, match_punct(',')))(&i)
+    {
+        (
+            rest,
+            Some(CustomTerminal {
+                match_text: match_text.1,
+                match_token: match_token.1,
+            }),
+        )
+    } else {
+        (i.as_slice(), None)
     };
+
+    let terminal = terminals.unwrap_or_else(|| CustomTerminal {
+        match_text: Path {
+            segments: vec![Ident::new("match_text", Span::call_site())],
+        },
+        match_token: Path {
+            segments: vec![Ident::new("match_token", Span::call_site())],
+        },
+    });
 
     let rule = parse_rule(i.iter().cloned().collect());
     rule.check_return_type();
@@ -159,9 +241,6 @@ fn parse_rule(tokens: TokenStream) -> Rule {
         abort!(rest, "unable to parse the following rules: {}", rest);
     }
 
-    #[cfg(feature = "auto-sequence")]
-    let elems = auto_sequence::amend_sequence(elems);
-
     let mut iter = elems.into_iter().peekable();
     let rule = unwrap_pratt(RuleParser.parse(&mut iter));
     if iter.peek().is_some() {
@@ -180,13 +259,7 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
     let function_call = |i| {
         let (i, hashtag) = match_punct('#')(i)?;
         let (i, (path_span, fn_path)) = path(i)?;
-        let (i, args) = opt(verify(group, |g| {
-            if cfg!(feature = "auto-sequence") {
-                path_span.end() == g.span().start()
-            } else {
-                true
-            }
-        }))(i)?;
+        let (i, args) = opt(group)(i)?;
         let span = hashtag.span().join(path_span).unwrap_or(Span::call_site());
         let span = args
             .as_ref()
@@ -256,48 +329,6 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
         function_call,
         context,
     ))(i)
-}
-
-#[cfg(feature = "auto-sequence")]
-mod auto_sequence {
-    use super::*;
-
-    // Automatically insert `RuleElement::Sequence` between primaries.
-    pub(crate) fn amend_sequence(elems: impl IntoIterator<Item = WithSpan>) -> Vec<WithSpan> {
-        let mut output = Vec::new();
-        let mut iter = elems.into_iter().peekable();
-        loop {
-            match (iter.next(), iter.peek()) {
-                (Some(lhs), Some(rhs)) if should_amend(&lhs, rhs) => {
-                    let span = lhs.span.join(rhs.span);
-                    output.push(lhs);
-                    output.push(WithSpan {
-                        elem: RuleElement::Sequence,
-                        span,
-                    });
-                }
-                (Some(elem), _) => {
-                    output.push(elem);
-                }
-                (None, _) => break,
-            }
-        }
-        output
-    }
-
-    fn should_amend(lhs: &WithSpan, rhs: &WithSpan) -> bool {
-        match (query_affix(lhs), query_affix(rhs)) {
-            (Affix::Nilfix, Affix::Nilfix)
-            | (Affix::Nilfix, Affix::Prefix(_))
-            | (Affix::Postfix(_), Affix::Nilfix)
-            | (Affix::Postfix(_), Affix::Prefix(_)) => true,
-            _ => false,
-        }
-    }
-
-    fn query_affix(elem: &WithSpan) -> Affix {
-        PrattParser::<std::iter::Once<_>>::query(&mut RuleParser, elem).unwrap()
-    }
 }
 
 fn unwrap_pratt(res: Result<Rule, PrattError<WithSpan, pratt::NoError>>) -> Rule {
