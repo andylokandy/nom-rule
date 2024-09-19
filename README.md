@@ -64,7 +64,3 @@ The `rule!` macro follows these rules:
 ## Example
 
 See the [`sqlparser.rs`](examples/sqlparser.rs) file for a complete example parsing a simplified SQL `CREATE TABLE` statement.
-
-## License
-
-[MIT License](LICENSE)
