@@ -16,7 +16,7 @@ proc-macro = true
 [dependencies]
 nom = "7"
 pratt = "0.4"
-proc-macro-error = "1"
+proc-macro-error2 = "2.0.1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 syn = "2"

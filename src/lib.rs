@@ -24,8 +24,9 @@
 //! | `... : "description"` | Adds a context description for error reporting.                                  | `nom::error::context("description", a)` | 2 (Postfix)              |
 //! # Example
 //!
-//! ```rust
+//! ```rust-example
 //! use nom_rule::rule;
+//! use nom::IResult;
 //!
 //! // Define your match functions
 //! fn match_text<'a>(text: &'a str) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, &'a Token<'a>> {
@@ -68,9 +69,9 @@ use proc_macro2::Spacing;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use proc_macro2::TokenTree;
-use proc_macro_error::abort;
-use proc_macro_error::abort_call_site;
-use proc_macro_error::proc_macro_error;
+use proc_macro_error2::abort;
+use proc_macro_error2::abort_call_site;
+use proc_macro_error2::proc_macro_error;
 use quote::quote;
 use quote::ToTokens;
 use quote::TokenStreamExt;
