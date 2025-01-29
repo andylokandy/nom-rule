@@ -34,32 +34,34 @@ fn ident<'a>(input: Input<'a>) -> IResult<Input<'a>, &str> {
     // Implementation
 }
 
-// Use the `rule!` macro
-let mut parser = rule!(
-    CREATE ~ TABLE ~ #ident ~ ^"(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";"
-    : "CREATE TABLE statement"
-);
+fn main() {
+    // Use the `rule!` macro
+    let mut parser = rule!(
+        CREATE ~ TABLE ~ #ident ~ ^"(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";"
+        : "CREATE TABLE statement"
+    );
+}
 ```
 
 ## Syntax
 
 The `rule!` macro follows these rules:
 
-| **Syntax**            | **Description**                                                                  | **Expanded to**                         | **Operator Precedence**  |
-|-----------------------|----------------------------------------------------------------------------------|-----------------------------------------|--------------------------|
-| `TOKEN`               | Matches a token by kind.                                                         | `match_token(TOKEN)`                    | -                        |
-| `"("`                 | Matches a token by its text.                                                     | `match_text("(")`                       | -                        |
-| `#fn_name`            | Calls an external nom parser function `fn_name`.                                 | `fn_name`                               | -                        |
-| `#fn_name(a, b, c)`   | Calls an external nom parser function `fn_name` with arguments.                  | `fn_name(a, b, c)`                      | -                        |
-| `a ~ b ~ c`           | Sequences parsers `a`, `b`, and `c`.                                             | `nom::sequence::tuple((a, b, c))`       | 3 (Left Associative)     |
-| `a+`                  | One or more repetitions.                                                         | `nom::multi::many1(a)`                  | 4 (Postfix)              |
-| `a*`                  | Zero or more repetitions.                                                        | `nom::multi::many0(a)`                  | 4 (Postfix)              |
-| `a?`                  | Optional parser.                                                                 | `nom::combinator::opt(a)`               | 4 (Postfix)              |
-| `a \| b \| c`         | Choice between parsers `a`, `b`, and `c`.                                        | `nom::branch::alt((a, b, c))`           | 1 (Left Associative)     |
-| `&a`                  | Peeks at parser `a` without consuming input.                                     | `nom::combinator::peek(a)`              | 5 (Prefix)               |
-| `!a`                  | Negative lookahead for parser `a`.                                               | `nom::combinator::not(a)`               | 5 (Prefix)               |
-| `^a`                  | Cuts the parser `a`.                                                             | `nom::combinator::cut(a)`               | 5 (Prefix)               |
-| `... : "description"` | Adds a context description for error reporting.                                  | `nom::error::context("description", a)` | 2 (Postfix)              |
+| **Syntax**            | **Description**                                                 | **Expanded to**                         | **Operator Precedence** |
+|-----------------------|-----------------------------------------------------------------|-----------------------------------------|-------------------------|
+| `TOKEN`               | Matches a token by kind.                                        | `match_token(TOKEN)`                    | -                       |
+| `"("`                 | Matches a token by its text.                                    | `match_text("(")`                       | -                       |
+| `#fn_name`            | Calls an external nom parser function `fn_name`.                | `fn_name`                               | -                       |
+| `#fn_name(a, b, c)`   | Calls an external nom parser function `fn_name` with arguments. | `fn_name(a, b, c)`                      | -                       |
+| `a ~ b ~ c`           | Sequences parsers `a`, `b`, and `c`.                            | `nom::sequence::tuple((a, b, c))`       | 3 (Left Associative)    |
+| `a+`                  | One or more repetitions.                                        | `nom::multi::many1(a)`                  | 4 (Postfix)             |
+| `a*`                  | Zero or more repetitions.                                       | `nom::multi::many0(a)`                  | 4 (Postfix)             |
+| `a?`                  | Optional parser.                                                | `nom::combinator::opt(a)`               | 4 (Postfix)             |
+| `a \| b \| c`         | Choice between parsers `a`, `b`, and `c`.                       | `nom::branch::alt((a, b, c))`           | 1 (Left Associative)    |
+| `&a`                  | Peeks at parser `a` without consuming input.                    | `nom::combinator::peek(a)`              | 5 (Prefix)              |
+| `!a`                  | Negative lookahead for parser `a`.                              | `nom::combinator::not(a)`               | 5 (Prefix)              |
+| `^a`                  | Cuts the parser `a`.                                            | `nom::combinator::cut(a)`               | 5 (Prefix)              |
+| `... : "description"` | Adds a context description for error reporting.                 | `nom::error::context("description", a)` | 2 (Postfix)             |
 
 ## Example
 

@@ -1,8 +1,8 @@
 [package]
 name = "nom-rule"
 version = "0.4.0"
-authors = ["andylokandy"]
 edition = "2021"
+rust-version = "1.80.0"
 license = "MIT"
 description = "A procedural macro for writing nom parsers using a grammar-like DSL."
 homepage = "https://github.com/andylokandy/nom-rule"
@@ -14,12 +14,12 @@ keywords = ["nom", "parser", "grammar", "DSL", "parsing"]
 proc-macro = true
 
 [dependencies]
-nom = "7"
-pratt = "0.4"
-proc-macro-error2 = "2.0.1"
+nom = { version = "8" }
+pratt = { version = "0.4" }
+proc-macro-error2 = { version = "2" }
 proc-macro2 = { version = "1", features = ["span-locations"] }
-quote = "1"
-syn = "2"
+quote = { version = "1" }
+syn = { version = "2" }
 
 [dev-dependencies]
-logos = "0.14"
+logos = { version = "0.15" }

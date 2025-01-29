@@ -10,7 +10,7 @@
 //! | **Syntax**            | **Description**                                                                  | **Expanded to**                         | **Operator Precedence**  |
 //! |-----------------------|----------------------------------------------------------------------------------|-----------------------------------------|--------------------------|
 //! | `TOKEN`               | Matches a token by kind.                                                         | `match_token(TOKEN)`                    | -                        |
-//! | `"("`                 | Matches a token by its text.                                                     | `match_text("(")`                       | -                        |
+//! | `"@"`                 | Matches a token by its text.                                                     | `match_text("@")`                       | -                        |
 //! | `#fn_name`            | Calls an external nom parser function `fn_name`.                                 | `fn_name`                               | -                        |
 //! | `#fn_name(a, b, c)`   | Calls an external nom parser function `fn_name` with arguments.                  | `fn_name(a, b, c)`                      | -                        |
 //! | `a ~ b ~ c`           | Sequences parsers `a`, `b`, and `c`.                                             | `nom::sequence::tuple((a, b, c))`       | 3 (Left Associative)     |
@@ -54,8 +54,8 @@ use nom::combinator::opt;
 use nom::error::make_error;
 use nom::error::ErrorKind;
 use nom::multi::many0;
-use nom::sequence::tuple;
 use nom::IResult;
+use nom::Parser;
 use pratt::Affix;
 use pratt::Associativity;
 use pratt::PrattError;
@@ -89,7 +89,7 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // Attempt to parse the paths for match_text and match_token
     let (i, terminals) = if let Ok((rest, (match_text, _, match_token, _))) =
-        tuple((path, match_punct(','), path, match_punct(',')))(&i)
+        (path, match_punct(','), path, match_punct(',')).parse(&i)
     {
         (
             rest,
@@ -185,7 +185,7 @@ fn match_punct<'a>(punct: char) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, T
     }
 }
 
-fn group<'a>(i: Input<'a>) -> IResult<Input<'a>, Group> {
+fn group(i: Input) -> IResult<Input, Group> {
     match i.get(0).and_then(|token| match token {
         TokenTree::Group(group) => Some(group.clone()),
         _ => None,
@@ -195,7 +195,7 @@ fn group<'a>(i: Input<'a>) -> IResult<Input<'a>, Group> {
     }
 }
 
-fn literal<'a>(i: Input<'a>) -> IResult<Input<'a>, Literal> {
+fn literal(i: Input) -> IResult<Input, Literal> {
     match i.get(0).and_then(|token| match token {
         TokenTree::Literal(lit) => Some(lit.clone()),
         _ => None,
@@ -205,7 +205,7 @@ fn literal<'a>(i: Input<'a>) -> IResult<Input<'a>, Literal> {
     }
 }
 
-fn ident<'a>(i: Input<'a>) -> IResult<Input<'a>, Ident> {
+fn ident(i: Input) -> IResult<Input, Ident> {
     match i.get(0).and_then(|token| match token {
         TokenTree::Ident(ident) => Some(ident.clone()),
         _ => None,
@@ -215,12 +215,9 @@ fn ident<'a>(i: Input<'a>) -> IResult<Input<'a>, Ident> {
     }
 }
 
-fn path<'a>(i: Input<'a>) -> IResult<Input<'a>, (Span, Path)> {
+fn path(i: Input) -> IResult<Input, (Span, Path)> {
     map(
-        tuple((
-            ident,
-            many0(tuple((match_punct(':'), match_punct(':'), ident))),
-        )),
+        (ident, many0((match_punct(':'), match_punct(':'), ident))),
         |(head, tail)| {
             let mut segments = vec![head.clone()];
             segments.extend(tail.into_iter().map(|(_, _, segment)| segment));
@@ -230,13 +227,14 @@ fn path<'a>(i: Input<'a>) -> IResult<Input<'a>, (Span, Path)> {
                 .unwrap_or(Span::call_site());
             (span, Path { segments })
         },
-    )(i)
+    )
+    .parse(i)
 }
 
 fn parse_rule(tokens: TokenStream) -> Rule {
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
-    let (i, elems) = many0(parse_rule_element)(&i).unwrap();
+    let (i, elems) = many0(parse_rule_element).parse(&i).unwrap();
     if !i.is_empty() {
         let rest: TokenStream = i.iter().cloned().collect();
         abort!(rest, "unable to parse the following rules: {}", rest);
@@ -256,11 +254,11 @@ fn parse_rule(tokens: TokenStream) -> Rule {
     rule
 }
 
-fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
+fn parse_rule_element(i: Input) -> IResult<Input, WithSpan> {
     let function_call = |i| {
         let (i, hashtag) = match_punct('#')(i)?;
         let (i, (path_span, fn_path)) = path(i)?;
-        let (i, args) = opt(group)(i)?;
+        let (i, args) = opt(group).parse(i)?;
         let span = hashtag.span().join(path_span).unwrap_or(Span::call_site());
         let span = args
             .as_ref()
@@ -275,7 +273,7 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
             },
         ))
     };
-    let context = map(tuple((match_punct(':'), literal)), |(colon, msg)| {
+    let context = map((match_punct(':'), literal), |(colon, msg)| {
         let span = colon.span().join(msg.span()).unwrap_or(Span::call_site());
         WithSpan {
             elem: RuleElement::Context(msg),
@@ -329,7 +327,8 @@ fn parse_rule_element<'a>(i: Input<'a>) -> IResult<Input<'a>, WithSpan> {
         }),
         function_call,
         context,
-    ))(i)
+    ))
+    .parse(i)
 }
 
 fn unwrap_pratt(res: Result<Rule, PrattError<WithSpan, pratt::NoError>>) -> Rule {
