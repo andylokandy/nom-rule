@@ -54,8 +54,8 @@ use nom::combinator::opt;
 use nom::error::make_error;
 use nom::error::ErrorKind;
 use nom::multi::many0;
-use nom::IResult;
 use nom::Parser;
+use nom::{IResult, Needed};
 use pratt::Affix;
 use pratt::Associativity;
 use pratt::PrattError;
@@ -75,6 +75,9 @@ use proc_macro_error2::proc_macro_error;
 use quote::quote;
 use quote::ToTokens;
 use quote::TokenStreamExt;
+use std::iter::{Cloned, Enumerate};
+use std::ops::Deref;
+use std::slice::Iter;
 use syn::punctuated::Punctuated;
 use syn::Token;
 
@@ -89,7 +92,7 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // Attempt to parse the paths for match_text and match_token
     let (i, terminals) = if let Ok((rest, (match_text, _, match_token, _))) =
-        (path, match_punct(','), path, match_punct(',')).parse(&i)
+        (path, match_punct(','), path, match_punct(',')).parse(Input(&i))
     {
         (
             rest,
@@ -99,7 +102,7 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
             }),
         )
     } else {
-        (i.as_slice(), None)
+        (Input(i.as_slice()), None)
     };
 
     let terminal = terminals.unwrap_or_else(|| CustomTerminal {
@@ -173,14 +176,69 @@ struct CustomTerminal {
     match_token: Path,
 }
 
-type Input<'a> = &'a [TokenTree];
+#[derive(Debug, Clone)]
+struct Input<'a>(&'a [TokenTree]);
+
+impl Deref for Input<'_> {
+    type Target = [TokenTree];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'a> nom::Input for Input<'a> {
+    type Item = TokenTree;
+    type Iter = Cloned<Iter<'a, TokenTree>>;
+    type IterIndices = Enumerate<Self::Iter>;
+
+    fn input_len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn take(&self, index: usize) -> Self {
+        Input(&self.0[0..index])
+    }
+
+    fn take_from(&self, index: usize) -> Self {
+        Input(&self.0[index..])
+    }
+
+    fn take_split(&self, index: usize) -> (Self, Self) {
+        let (prefix, suffix) = self.0.split_at(index);
+        (Input(suffix), Input(prefix))
+    }
+
+    fn position<P>(&self, predicate: P) -> Option<usize>
+    where
+        P: Fn(Self::Item) -> bool,
+    {
+        self.iter().position(|b| predicate(b.clone()))
+    }
+
+    fn iter_elements(&self) -> Self::Iter {
+        self.0.iter().cloned()
+    }
+
+    fn iter_indices(&self) -> Self::IterIndices {
+        self.iter_elements().enumerate()
+    }
+
+    fn slice_index(&self, count: usize) -> Result<usize, Needed> {
+        if self.len() >= count {
+            Ok(count)
+        } else {
+            Err(Needed::new(count - self.len()))
+        }
+    }
+}
 
 fn match_punct<'a>(punct: char) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, TokenTree> {
     move |i| match i.get(0).and_then(|token| match token {
         TokenTree::Punct(p) if p.as_char() == punct => Some(token.clone()),
         _ => None,
     }) {
-        Some(token) => Ok((&i[1..], token)),
+        Some(token) => Ok((Input(&i.0[1..]), token)),
         _ => Err(nom::Err::Error(make_error(i, ErrorKind::Satisfy))),
     }
 }
@@ -190,7 +248,7 @@ fn group(i: Input) -> IResult<Input, Group> {
         TokenTree::Group(group) => Some(group.clone()),
         _ => None,
     }) {
-        Some(group) => Ok((&i[1..], group)),
+        Some(group) => Ok((Input(&i.0[1..]), group)),
         _ => Err(nom::Err::Error(make_error(i, ErrorKind::Satisfy))),
     }
 }
@@ -200,7 +258,7 @@ fn literal(i: Input) -> IResult<Input, Literal> {
         TokenTree::Literal(lit) => Some(lit.clone()),
         _ => None,
     }) {
-        Some(lit) => Ok((&i[1..], lit)),
+        Some(lit) => Ok((Input(&i.0[1..]), lit)),
         _ => Err(nom::Err::Error(make_error(i, ErrorKind::Satisfy))),
     }
 }
@@ -210,7 +268,7 @@ fn ident(i: Input) -> IResult<Input, Ident> {
         TokenTree::Ident(ident) => Some(ident.clone()),
         _ => None,
     }) {
-        Some(ident) => Ok((&i[1..], ident)),
+        Some(ident) => Ok((Input(&i.0[1..]), ident)),
         _ => Err(nom::Err::Error(make_error(i, ErrorKind::Satisfy))),
     }
 }
@@ -234,7 +292,7 @@ fn path(i: Input) -> IResult<Input, (Span, Path)> {
 fn parse_rule(tokens: TokenStream) -> Rule {
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
-    let (i, elems) = many0(parse_rule_element).parse(&i).unwrap();
+    let (i, elems) = many0(parse_rule_element).parse(Input(&i)).unwrap();
     if !i.is_empty() {
         let rest: TokenStream = i.iter().cloned().collect();
         abort!(rest, "unable to parse the following rules: {}", rest);
