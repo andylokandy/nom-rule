@@ -13,7 +13,7 @@
 //! | `"@"`                 | Matches a token by its text.                                                     | `match_text("@")`                       | -                        |
 //! | `#fn_name`            | Calls an external nom parser function `fn_name`.                                 | `fn_name`                               | -                        |
 //! | `#fn_name(a, b, c)`   | Calls an external nom parser function `fn_name` with arguments.                  | `fn_name(a, b, c)`                      | -                        |
-//! | `a ~ b ~ c`           | Sequences parsers `a`, `b`, and `c`.                                             | `nom::sequence::tuple((a, b, c))`       | 3 (Left Associative)     |
+//! | `a ~ b ~ c`           | Sequences parsers `a`, `b`, and `c`.                                             | `((a, b, c))`                           | 3 (Left Associative)     |
 //! | `a+`                  | One or more repetitions.                                                         | `nom::multi::many1(a)`                  | 4 (Postfix)              |
 //! | `a*`                  | Zero or more repetitions.                                                        | `nom::multi::many0(a)`                  | 4 (Postfix)              |
 //! | `a?`                  | Optional parser.                                                                 | `nom::combinator::opt(a)`               | 4 (Postfix)              |
@@ -657,7 +657,7 @@ impl Rule {
                     .iter()
                     .map(|rule| rule.to_token_stream(terminal))
                     .collect();
-                quote! { nom::sequence::tuple((#list)) }
+                quote! { ((#list)) }
             }
             Rule::Choice(_, rules) => {
                 let list: Punctuated<TokenStream, Token![,]> = rules
