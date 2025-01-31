@@ -2,8 +2,11 @@ use logos::Logos;
 use nom::combinator::map;
 use nom::error::ErrorKind;
 use nom::error::ParseError;
-use nom::IResult;
+use nom::Parser;
+use nom::{IResult, Needed};
 use nom_rule::rule;
+use std::iter::{Cloned, Enumerate};
+use std::slice::Iter;
 use TokenKind::*;
 
 #[derive(Logos, Clone, Copy, Debug, PartialEq)]
@@ -33,7 +36,54 @@ struct Token<'a> {
     span: std::ops::Range<usize>,
 }
 
-type Input<'a> = &'a [Token<'a>];
+#[derive(Debug, Clone)]
+struct Input<'a>(&'a [Token<'a>]);
+
+impl<'a> nom::Input for Input<'a> {
+    type Item = Token<'a>;
+    type Iter = Cloned<Iter<'a, Token<'a>>>;
+    type IterIndices = Enumerate<Self::Iter>;
+
+    fn input_len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn take(&self, index: usize) -> Self {
+        Input(&self.0[0..index])
+    }
+
+    fn take_from(&self, index: usize) -> Self {
+        Input(&self.0[index..])
+    }
+
+    fn take_split(&self, index: usize) -> (Self, Self) {
+        let (prefix, suffix) = self.0.split_at(index);
+        (Input(suffix), Input(prefix))
+    }
+
+    fn position<P>(&self, predicate: P) -> Option<usize>
+    where
+        P: Fn(Self::Item) -> bool,
+    {
+        self.0.iter().position(|b| predicate(b.clone()))
+    }
+
+    fn iter_elements(&self) -> Self::Iter {
+        self.0.iter().cloned()
+    }
+
+    fn iter_indices(&self) -> Self::IterIndices {
+        self.iter_elements().enumerate()
+    }
+
+    fn slice_index(&self, count: usize) -> Result<usize, Needed> {
+        if self.0.len() >= count {
+            Ok(count)
+        } else {
+            Err(Needed::new(count - self.0.len()))
+        }
+    }
+}
 
 fn tokenise(input: &str) -> Vec<Token> {
     let mut lex = TokenKind::lexer(input);
@@ -62,10 +112,8 @@ fn match_token<'a, Error: ParseError<Input<'a>>>(
     move |i| satisfy(|token: &Token<'a>| token.kind == kind)(i)
 }
 
-fn ident<'a, Error: ParseError<Input<'a>>>(i: Input<'a>) -> IResult<Input<'a>, &str, Error> {
-    map(satisfy(|token| token.kind == TokenKind::Ident), |token| {
-        token.text
-    })(i)
+fn ident<'a, Error: ParseError<Input<'a>>>(i: Input<'a>) -> IResult<Input<'a>, &'a str, Error> {
+    map(satisfy(|token| token.kind == Ident), |token| token.text).parse(i)
 }
 
 fn satisfy<'a, F, Error: ParseError<Input<'a>>>(
@@ -74,11 +122,11 @@ fn satisfy<'a, F, Error: ParseError<Input<'a>>>(
 where
     F: Fn(&Token<'a>) -> bool,
 {
-    move |i| match i.get(0).map(|t| {
+    move |i| match i.0.get(0).map(|t| {
         let b = cond(&t);
         (t, b)
     }) {
-        Some((t, true)) => Ok((&i[1..], t)),
+        Some((t, true)) => Ok((Input(&i.0[1..]), t)),
         _ => Err(nom::Err::Error(Error::from_error_kind(
             i,
             ErrorKind::Satisfy,
@@ -87,7 +135,7 @@ where
 }
 
 #[derive(Debug)]
-#[allow(de)]
+#[allow(dead_code)]
 struct CreateTableStmt {
     name: String,
     columns: Vec<(String, String)>,
@@ -110,9 +158,18 @@ fn main() {
         },
     );
 
-    let res: IResult<Input, CreateTableStmt> = create_table(&tokens);
+    let result: IResult<Input, CreateTableStmt> = create_table.parse(Input(&tokens));
+    let (rest, stmt) = result.unwrap();
+
+    println!("{stmt:?}");
+
+    assert!(rest.0.is_empty());
+    assert_eq!(stmt.name, "users");
     assert_eq!(
-        format!("{res:?}"),
-        r#"Ok(([], CreateTableStmt { name: "users", columns: [("id", "INT"), ("name", "VARCHAR")] }))"#
+        &stmt.columns,
+        &[
+            ("id".to_string(), "INT".to_string()),
+            ("name".to_string(), "VARCHAR".to_string())
+        ]
     );
 }
