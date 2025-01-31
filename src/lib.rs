@@ -234,7 +234,7 @@ impl<'a> nom::Input for Input<'a> {
 }
 
 fn match_punct<'a>(punct: char) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, TokenTree> {
-    move |i| match i.get(0).and_then(|token| match token {
+    move |i| match i.first().and_then(|token| match token {
         TokenTree::Punct(p) if p.as_char() == punct => Some(token.clone()),
         _ => None,
     }) {
@@ -244,7 +244,7 @@ fn match_punct<'a>(punct: char) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, T
 }
 
 fn group(i: Input) -> IResult<Input, Group> {
-    match i.get(0).and_then(|token| match token {
+    match i.first().and_then(|token| match token {
         TokenTree::Group(group) => Some(group.clone()),
         _ => None,
     }) {
@@ -254,7 +254,7 @@ fn group(i: Input) -> IResult<Input, Group> {
 }
 
 fn literal(i: Input) -> IResult<Input, Literal> {
-    match i.get(0).and_then(|token| match token {
+    match i.first().and_then(|token| match token {
         TokenTree::Literal(lit) => Some(lit.clone()),
         _ => None,
     }) {
@@ -264,7 +264,7 @@ fn literal(i: Input) -> IResult<Input, Literal> {
 }
 
 fn ident(i: Input) -> IResult<Input, Ident> {
-    match i.get(0).and_then(|token| match token {
+    match i.first().and_then(|token| match token {
         TokenTree::Ident(ident) => Some(ident.clone()),
         _ => None,
     }) {
@@ -657,7 +657,7 @@ impl Rule {
                     .iter()
                     .map(|rule| rule.to_token_stream(terminal))
                     .collect();
-                quote! { ((#list)) }
+                quote! { (#list) }
             }
             Rule::Choice(_, rules) => {
                 let list: Punctuated<TokenStream, Token![,]> = rules

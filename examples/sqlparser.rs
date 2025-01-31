@@ -10,6 +10,7 @@ use std::slice::Iter;
 use TokenKind::*;
 
 #[derive(Logos, Clone, Copy, Debug, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 enum TokenKind {
     #[regex(r"[ \t\n\f]+", logos::skip)]
     Whitespace,
@@ -122,8 +123,8 @@ fn satisfy<'a, F, Error: ParseError<Input<'a>>>(
 where
     F: Fn(&Token<'a>) -> bool,
 {
-    move |i| match i.0.get(0).map(|t| {
-        let b = cond(&t);
+    move |i| match i.0.first().map(|t| {
+        let b = cond(t);
         (t, b)
     }) {
         Some((t, true)) => Ok((Input(&i.0[1..]), t)),
