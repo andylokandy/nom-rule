@@ -14,9 +14,9 @@ use TokenKind::*;
 enum TokenKind {
     #[regex(r"[ \t\n\f]+", logos::skip)]
     Whitespace,
-    #[token("CREATE", ignore(ascii_case))]
+    #[token("CREATE", ignore(case))]
     CREATE,
-    #[token("TABLE", ignore(ascii_case))]
+    #[token("TABLE", ignore(case))]
     TABLE,
     #[token("(")]
     LParen,
@@ -86,7 +86,7 @@ impl<'a> nom::Input for Input<'a> {
     }
 }
 
-fn tokenise(input: &str) -> Vec<Token> {
+fn tokenise(input: &str) -> Vec<Token<'_>> {
     let mut lex = TokenKind::lexer(input);
     let mut tokens = Vec::new();
 

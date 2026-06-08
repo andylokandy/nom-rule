@@ -69,9 +69,6 @@ use proc_macro2::Spacing;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use proc_macro2::TokenTree;
-use proc_macro_error2::abort;
-use proc_macro_error2::abort_call_site;
-use proc_macro_error2::proc_macro_error;
 use quote::quote;
 use quote::ToTokens;
 use quote::TokenStreamExt;
@@ -85,9 +82,14 @@ use syn::Token;
 ///
 /// See the [crate level documentation](index.html) for more information.
 #[proc_macro]
-#[proc_macro_error]
 pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let tokens: TokenStream = tokens.into();
+    match expand_rule(tokens.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+fn expand_rule(tokens: TokenStream) -> syn::Result<TokenStream> {
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
     // Attempt to parse the paths for match_text and match_token
@@ -114,9 +116,9 @@ pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
         },
     });
 
-    let rule = parse_rule(i.iter().cloned().collect());
-    rule.check_return_type();
-    rule.to_token_stream(&terminal).into()
+    let rule = parse_rule(i.iter().cloned().collect())?;
+    rule.check_return_type()?;
+    Ok(rule.to_token_stream(&terminal))
 }
 
 #[derive(Debug, Clone)]
@@ -154,7 +156,7 @@ enum RuleElement {
     Many1,
     Sequence,
     Choice,
-    SubRule(Rule),
+    SubRule(Group),
 }
 
 #[derive(Debug, Clone)]
@@ -289,27 +291,66 @@ fn path(i: Input) -> IResult<Input, (Span, Path)> {
     .parse(i)
 }
 
-fn parse_rule(tokens: TokenStream) -> Rule {
+fn parse_rule(tokens: TokenStream) -> syn::Result<Rule> {
     let i: Vec<TokenTree> = tokens.into_iter().collect();
 
-    let (i, elems) = many0(parse_rule_element).parse(Input(&i)).unwrap();
+    let (i, elems) = many0(parse_rule_element)
+        .parse(Input(&i))
+        .map_err(nom_error_to_syn)?;
     if !i.is_empty() {
         let rest: TokenStream = i.iter().cloned().collect();
-        abort!(rest, "unable to parse the following rules: {}", rest);
+        return Err(syn::Error::new_spanned(
+            rest,
+            "unable to parse the following rules",
+        ));
     }
 
     let mut iter = elems.into_iter().peekable();
-    let rule = unwrap_pratt(RuleParser.parse(&mut iter));
+    let rule = RuleParser.parse(&mut iter).map_err(pratt_error_to_syn)?;
     if iter.peek().is_some() {
         let rest: Vec<_> = iter.collect();
-        abort!(
+        return Err(syn::Error::new(
             rest[0].span,
-            "unable to parse the following rules: {:?}",
-            rest
-        );
+            format!("unable to parse the following rules: {rest:?}"),
+        ));
     }
 
-    rule
+    Ok(rule)
+}
+
+fn nom_error_to_syn(error: nom::Err<nom::error::Error<Input<'_>>>) -> syn::Error {
+    match error {
+        nom::Err::Error(error) | nom::Err::Failure(error) => {
+            let tokens: TokenStream = error.input.iter().cloned().collect();
+            if tokens.is_empty() {
+                syn::Error::new(Span::call_site(), "unable to parse rule")
+            } else {
+                syn::Error::new_spanned(tokens, "unable to parse rule")
+            }
+        }
+        nom::Err::Incomplete(_) => syn::Error::new(Span::call_site(), "incomplete rule"),
+    }
+}
+
+fn pratt_error_to_syn(error: PrattError<WithSpan, syn::Error>) -> syn::Error {
+    match error {
+        PrattError::UserError(error) => error,
+        PrattError::EmptyInput => {
+            syn::Error::new(Span::call_site(), "expected more tokens for rule")
+        }
+        PrattError::UnexpectedNilfix(input) => {
+            syn::Error::new(input.span, "unable to parse the value")
+        }
+        PrattError::UnexpectedPrefix(input) => {
+            syn::Error::new(input.span, "unable to parse the prefix operator")
+        }
+        PrattError::UnexpectedInfix(input) => {
+            syn::Error::new(input.span, "unable to parse the binary operator")
+        }
+        PrattError::UnexpectedPostfix(input) => {
+            syn::Error::new(input.span, "unable to parse the postfix operator")
+        }
+    }
 }
 
 fn parse_rule_element(i: Input) -> IResult<Input, WithSpan> {
@@ -381,7 +422,7 @@ fn parse_rule_element(i: Input) -> IResult<Input, WithSpan> {
         }),
         map(group, |group| WithSpan {
             span: group.span(),
-            elem: RuleElement::SubRule(parse_rule(group.stream())),
+            elem: RuleElement::SubRule(group),
         }),
         function_call,
         context,
@@ -389,34 +430,14 @@ fn parse_rule_element(i: Input) -> IResult<Input, WithSpan> {
     .parse(i)
 }
 
-fn unwrap_pratt(res: Result<Rule, PrattError<WithSpan, pratt::NoError>>) -> Rule {
-    match res {
-        Ok(res) => res,
-        Err(PrattError::EmptyInput) => abort_call_site!("expected more tokens for rule"),
-        Err(PrattError::UnexpectedNilfix(input)) => {
-            abort!(input.span, "unable to parse the value")
-        }
-        Err(PrattError::UnexpectedPrefix(input)) => {
-            abort!(input.span, "unable to parse the prefix operator")
-        }
-        Err(PrattError::UnexpectedInfix(input)) => {
-            abort!(input.span, "unable to parse the binary operator")
-        }
-        Err(PrattError::UnexpectedPostfix(input)) => {
-            abort!(input.span, "unable to parse the postfix operator")
-        }
-        Err(PrattError::UserError(_)) => unreachable!(),
-    }
-}
-
 struct RuleParser;
 
 impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
-    type Error = pratt::NoError;
+    type Error = syn::Error;
     type Input = WithSpan;
     type Output = Rule;
 
-    fn query(&mut self, elem: &WithSpan) -> pratt::Result<Affix> {
+    fn query(&mut self, elem: &WithSpan) -> Result<Affix, syn::Error> {
         let affix = match elem.elem {
             RuleElement::Choice => Affix::Infix(Precedence(1), Associativity::Left),
             RuleElement::Context(_) => Affix::Postfix(Precedence(2)),
@@ -432,9 +453,17 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
         Ok(affix)
     }
 
-    fn primary(&mut self, elem: WithSpan) -> pratt::Result<Rule> {
+    fn primary(&mut self, elem: WithSpan) -> Result<Rule, syn::Error> {
         let rule = match elem.elem {
-            RuleElement::SubRule(rule) => rule,
+            RuleElement::SubRule(group) => {
+                if group.stream().is_empty() {
+                    return Err(syn::Error::new(
+                        group.span(),
+                        "expected more tokens for rule",
+                    ));
+                }
+                parse_rule(group.stream())?
+            }
             RuleElement::MatchText(text) => Rule::MatchText(elem.span, text),
             RuleElement::MatchToken(token) => Rule::MatchToken(elem.span, token),
             RuleElement::ExternalFunction(func, args) => {
@@ -445,7 +474,7 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
         Ok(rule)
     }
 
-    fn infix(&mut self, lhs: Rule, elem: WithSpan, rhs: Rule) -> pratt::Result<Rule> {
+    fn infix(&mut self, lhs: Rule, elem: WithSpan, rhs: Rule) -> Result<Rule, syn::Error> {
         let rule = match elem.elem {
             RuleElement::Sequence => match lhs {
                 Rule::Sequence(span, mut seq) => {
@@ -482,7 +511,7 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
         Ok(rule)
     }
 
-    fn prefix(&mut self, elem: WithSpan, rhs: Rule) -> pratt::Result<Rule> {
+    fn prefix(&mut self, elem: WithSpan, rhs: Rule) -> Result<Rule, syn::Error> {
         let rule = match elem.elem {
             RuleElement::Cut => {
                 let span = elem.span.join(rhs.span()).unwrap_or(Span::call_site());
@@ -501,7 +530,7 @@ impl<I: Iterator<Item = WithSpan>> PrattParser<I> for RuleParser {
         Ok(rule)
     }
 
-    fn postfix(&mut self, lhs: Rule, elem: WithSpan) -> pratt::Result<Rule> {
+    fn postfix(&mut self, lhs: Rule, elem: WithSpan) -> Result<Rule, syn::Error> {
         let rule = match elem.elem {
             RuleElement::Optional => {
                 let span = lhs.span().join(elem.span).unwrap_or(Span::call_site());
@@ -550,48 +579,50 @@ impl PartialEq for ReturnType {
 }
 
 impl Rule {
-    fn check_return_type(&self) -> ReturnType {
-        match self {
+    fn check_return_type(&self) -> syn::Result<ReturnType> {
+        let ty = match self {
             Rule::MatchText(_, _) | Rule::MatchToken(_, _) | Rule::ExternalFunction(_, _, _) => {
                 ReturnType::Unknown
             }
-            Rule::Context(_, _, rule) | Rule::Peek(_, rule) => rule.check_return_type(),
+            Rule::Context(_, _, rule) | Rule::Peek(_, rule) => rule.check_return_type()?,
             Rule::Not(_, _) => ReturnType::Unit,
-            Rule::Optional(_, rule) => ReturnType::Option(Box::new(rule.check_return_type())),
-            Rule::Cut(_, rule) => rule.check_return_type(),
+            Rule::Optional(_, rule) => ReturnType::Option(Box::new(rule.check_return_type()?)),
+            Rule::Cut(_, rule) => rule.check_return_type()?,
             Rule::Many0(_, rule) | Rule::Many1(_, rule) => {
-                ReturnType::Vec(Box::new(rule.check_return_type()))
+                ReturnType::Vec(Box::new(rule.check_return_type()?))
             }
             Rule::Sequence(_, rules) => {
-                rules.iter().for_each(|rule| {
-                    rule.check_return_type();
-                });
+                for rule in rules {
+                    rule.check_return_type()?;
+                }
                 ReturnType::Vec(Box::new(ReturnType::Unknown))
             }
             Rule::Choice(_, rules) => {
                 for slice in rules.windows(2) {
-                    match (slice[0].check_return_type(), slice[1].check_return_type()) {
+                    match (slice[0].check_return_type()?, slice[1].check_return_type()?) {
                         (ReturnType::Option(_), _) => {
-                            abort!(
+                            return Err(syn::Error::new(
                                 slice[0].span(),
                                 "optional shouldn't be in a choice because it will shortcut the following branches",
-                            )
+                            ));
                         }
-                        (a, b) if a != b => abort!(
-                            slice[0]
-                                .span()
-                                .join(slice[1].span())
-                                .unwrap_or(Span::call_site()),
-                            "type mismatched between {:} and {:}",
-                            a,
-                            b,
-                        ),
+                        (a, b) if a != b => {
+                            return Err(syn::Error::new(
+                                slice[0]
+                                    .span()
+                                    .join(slice[1].span())
+                                    .unwrap_or(Span::call_site()),
+                                format!("type mismatched between {a:} and {b:}"),
+                            ));
+                        }
                         _ => (),
                     }
                 }
-                ReturnType::Vec(Box::new(rules[0].check_return_type()))
+                ReturnType::Vec(Box::new(rules[0].check_return_type()?))
             }
-        }
+        };
+
+        Ok(ty)
     }
 
     fn span(&self) -> Span {
