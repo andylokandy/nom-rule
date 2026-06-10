@@ -1,52 +1,105 @@
-//! A procedural macro crate for writing nom parsers using a grammar-like syntax.
+//! Compose [`nom`] parsers with grammar-shaped expressions.
 //!
-//! The `nom-rule` crate provides the `rule!` macro, which allows you to define parsers in a DSL
-//! similar to grammar rules. This improves readability and maintainability.
+//! [`rule!`] is a procedural macro. It does not tokenize input and does not
+//! introduce a new parsing runtime. It expands a rule into ordinary `nom`
+//! parser values, using terminal matcher functions supplied by the calling
+//! crate.
 //!
-//! # Syntax
+//! The generated code refers to `nom::...`, so crates using this macro must
+//! depend on `nom` directly.
 //!
-//! The macro follows these rules:
+//! # Quick Start
 //!
-//! | **Syntax**            | **Description**                                                                  | **Expanded to**                         | **Operator Precedence**  |
-//! |-----------------------|----------------------------------------------------------------------------------|-----------------------------------------|--------------------------|
-//! | `TOKEN`               | Matches a token by kind.                                                         | `match_token(TOKEN)`                    | -                        |
-//! | `"@"`                 | Matches a token by its text.                                                     | `match_text("@")`                       | -                        |
-//! | `#fn_name`            | Calls an external nom parser function `fn_name`.                                 | `fn_name`                               | -                        |
-//! | `#fn_name(a, b, c)`   | Calls an external nom parser function `fn_name` with arguments.                  | `fn_name(a, b, c)`                      | -                        |
-//! | `a ~ b ~ c`           | Sequences parsers `a`, `b`, and `c`.                                             | `((a, b, c))`                           | 3 (Left Associative)     |
-//! | `a+`                  | One or more repetitions.                                                         | `nom::multi::many1(a)`                  | 4 (Postfix)              |
-//! | `a*`                  | Zero or more repetitions.                                                        | `nom::multi::many0(a)`                  | 4 (Postfix)              |
-//! | `a?`                  | Optional parser.                                                                 | `nom::combinator::opt(a)`               | 4 (Postfix)              |
-//! | `a \| b \| c`         | Choice between parsers `a`, `b`, and `c`.                                        | `nom::branch::alt((a, b, c))`           | 1 (Left Associative)     |
-//! | `&a`                  | Peeks at parser `a` without consuming input.                                     | `nom::combinator::peek(a)`              | 5 (Prefix)               |
-//! | `!a`                  | Negative lookahead for parser `a`.                                               | `nom::combinator::not(a)`               | 5 (Prefix)               |
-//! | `^a`                  | Cuts the parser `a`.                                                             | `nom::combinator::cut(a)`               | 5 (Prefix)               |
-//! | `... : "description"` | Adds a context description for error reporting.                                  | `nom::error::context("description", a)` | 2 (Postfix)              |
-//! # Example
-//!
-//! ```rust-example
-//! use nom_rule::rule;
-//! use nom::IResult;
-//!
-//! // Define your match functions
-//! fn match_text<'a>(text: &'a str) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, &'a Token<'a>> {
-//!     // Implementation
-//! }
-//!
-//! fn match_token<'a>(kind: TokenKind) -> impl FnMut(Input<'a>) -> IResult<Input<'a>, &'a Token<'a>> {
-//!     // Implementation
-//! }
-//!
-//! fn ident<'a>(input: Input<'a>) -> IResult<Input<'a>, &str> {
-//!     // Implementation
-//! }
-//!
-//! // Use the `rule!` macro
-//! let mut parser = rule!(
-//!     CREATE ~ TABLE ~ #ident ~ ^"(" ~ (#ident ~ #ident ~ ","?)* ~ ")" ~ ";"
-//!     : "CREATE TABLE statement"
-//! );
 //! ```
+//! use nom::bytes::complete::tag;
+//! use nom::character::complete::{alpha1, digit1};
+//! use nom::combinator::map_res;
+//! use nom::error::ParseError;
+//! use nom::{IResult, Parser};
+//! use nom_rule::rule;
+//!
+//! fn match_text<'a, Error>(
+//!     text: &'static str,
+//! ) -> impl Parser<&'a str, Output = &'a str, Error = Error>
+//! where
+//!     Error: ParseError<&'a str>,
+//! {
+//!     tag(text)
+//! }
+//!
+//! fn number(input: &str) -> IResult<&str, u32> {
+//!     map_res(digit1, str::parse).parse(input)
+//! }
+//!
+//! fn assignment(input: &str) -> IResult<&str, (&str, u32)> {
+//!     let mut parser = rule! {
+//!         "let " ~ #alpha1 ~ " = " ~ #number ~ ";"
+//!     };
+//!
+//!     let (rest, (_, name, _, value, _)) = parser.parse(input)?;
+//!     Ok((rest, (name, value)))
+//! }
+//!
+//! let (rest, (name, value)) = assignment("let answer = 42;").unwrap();
+//!
+//! assert_eq!(rest, "");
+//! assert_eq!(name, "answer");
+//! assert_eq!(value, 42);
+//! ```
+//!
+//! # Terminals
+//!
+//! Terminals are the boundary between the grammar expression and your input
+//! representation.
+//!
+//! | Rule form | Expanded call |
+//! |-----------|---------------|
+//! | `"text"` | `match_text("text")` |
+//! | `TOKEN` or `path::TOKEN` | `match_token(TOKEN)` or `match_token(path::TOKEN)` |
+//!
+//! The matcher signatures are not fixed. They only need to return values that
+//! implement [`nom::Parser`] for your input type.
+//!
+//! Custom terminal matcher paths can be supplied before the rule:
+//!
+//! ```ignore
+//! let parser = rule! {
+//!     crate::tokens::text, crate::tokens::kind,
+//!     TokenKind::Create ~ #ident
+//! };
+//! ```
+//!
+//! # Rule Syntax
+//!
+//! | Form | Meaning | Output shape |
+//! |------|---------|--------------|
+//! | `"text"` | Match text with `match_text` | matcher output |
+//! | `TOKEN` | Match a token with `match_token` | matcher output |
+//! | `#parser` | Use an existing parser | parser output |
+//! | `#parser(args...)` | Call a parser factory | parser output |
+//! | `a ~ b` | Run parsers in sequence | `(A, B)` |
+//! | `a \| b` | Try alternatives with [`nom::branch::alt`] | branch output |
+//! | `a?` | Optional parser | `Option<A>` |
+//! | `a*` | Zero or more matches | `Vec<A>` |
+//! | `a+` | One or more matches | `Vec<A>` |
+//! | `&a` | Peek without consuming input | `A` |
+//! | `!a` | Negative lookahead | `()` |
+//! | `^a` | Cut on failure | `A` |
+//! | `a : "context"` | Add [`nom::error::context`] | `A` |
+//!
+//! Use parentheses to group subrules.
+//!
+//! Operator precedence, from low to high:
+//!
+//! 1. choice: `a | b`
+//! 2. context: `a : "context"`
+//! 3. sequence: `a ~ b`
+//! 4. postfix operators: `?`, `*`, `+`
+//! 5. prefix operators: `&`, `!`, `^`
+//!
+//! Choice branches must return compatible output shapes. An optional branch is
+//! rejected before later alternatives because it can succeed without consuming
+//! input.
 
 use nom::branch::alt;
 use nom::combinator::map;
@@ -78,9 +131,10 @@ use std::slice::Iter;
 use syn::punctuated::Punctuated;
 use syn::Token;
 
-/// A procedural macro for writing nom parsers using a grammar-like syntax.
+/// Expands a grammar-shaped expression into a `nom` parser.
 ///
-/// See the [crate level documentation](index.html) for more information.
+/// See the [crate-level documentation](index.html) for terminal matcher
+/// expectations, syntax, precedence, and output shapes.
 #[proc_macro]
 pub fn rule(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     match expand_rule(tokens.into()) {
